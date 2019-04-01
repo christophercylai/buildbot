@@ -52,6 +52,11 @@ class State extends Config
                 name: 'changeLimit'
                 caption: 'Number of changes to fetch'
                 default_value: 30
+            ,
+                type: 'text'
+                name: 'defaultBranch'
+                caption: 'default branch to fetch'
+                default_value: "trunk"
             ]
 
 class Console extends Controller
@@ -61,6 +66,7 @@ class Console extends Controller
         settings = bbSettingsService.getSettingsGroup('Console')
         @buildLimit = settings.buildLimit.value
         @changeLimit = settings.changeLimit.value
+        @defaultBranch =settings.defaultBranch.value
         @dataAccessor = dataService.open().closeOnDestroy(@$scope)
         @_infoIsExpanded = {}
         @$scope.all_builders = @all_builders = @dataAccessor.getBuilders()
@@ -77,7 +83,7 @@ class Console extends Controller
                 return 1
 
         @$scope.builds = @builds = @dataAccessor.getBuilds
-            property: ["got_revision"]
+            property: ["got_revision", "author", "comment"]
             limit: @buildLimit
             order: '-started_at'
         @changes = @dataAccessor.getChanges({limit: @changeLimit, order: '-changeid'})
@@ -101,6 +107,9 @@ class Console extends Controller
             @all_builders.get(build.builderid).hasBuild = true
 
         @sortBuildersByTags(@all_builders)
+        # exit when there is no matching builder
+        if @builders.length == 0
+            return
 
         @changesBySSID ?= {}
         @changesByRevision ?= {}
@@ -109,9 +118,11 @@ class Console extends Controller
             @changesByRevision[change.revision] = change
             @populateChange(change)
 
-
         for build in @builds
-            @matchBuildWithChange(build)
+            try
+                @matchBuildWithChange(build)
+            catch
+                # do not display error
 
         @filtered_changes = []
         for ssid, change of @changesBySSID
@@ -133,8 +144,15 @@ class Console extends Controller
         # first we only want builders with builds
         builders_with_builds = []
         builderids_with_builds = ""
+
+        #query example "http://buildmaster.financialcad.com/console?<branch>"
+        url = window.location.href
+        branch = new URL(url).hash.split("?")[1]
+        if branch? is false
+            branch = @defaultBranch
+
         for builder in all_builders
-            if builder.hasBuild
+            if builder.hasBuild and builder.name.includes(branch)
                 builders_with_builds.push(builder)
                 builderids_with_builds += "." + builder.builderid
 
@@ -265,36 +283,42 @@ class Console extends Controller
         buildset = @buildsets.get(buildrequest.buildsetid)
         if not buildset?
             return
-        if  buildset? and buildset.sourcestamps?
+        if buildset? and buildset.sourcestamps?
             for sourcestamp in buildset.sourcestamps
                 change = @changesBySSID[sourcestamp.ssid]
                 if change?
                     break
 
+        # when there is no change (such as force build)
+        author = "Unknown"
+        comment = "N/A"
         if not change? and build.properties?.got_revision?
+            if build.properties.author?
+                author = build.properties.author[0].split('@')[0]
+            if build.properties.comment?
+                comment = build.properties.comment[0]
             rev = build.properties.got_revision[0]
             # got_revision can be per codebase or just the revision string
             if typeof(rev) == "string"
                 change = @changesByRevision[rev]
                 if not change?
-                    change = @makeFakeChange("", rev, build.started_at)
+                    change = @makeFakeChange("", rev, author, comment, build.started_at)
             else
                 for codebase, revision of rev
                     change = @changesByRevision[revision]
                     if change?
                         break;
-
                 if not change?
                     revision = if rev is {} then "" else rev[rev.keys()[0]]
-                    change = @makeFakeChange(codebase, revision, build.started_at)
+                    change = @makeFakeChange(codebase, revision, author, comment, build.started_at)
 
         if not change?
             revision = "unknown revision #{build.builderid}-#{build.buildid}"
-            change = @makeFakeChange("unknown codebase", revision, build.started_at)
+            change = @makeFakeChange("unknown codebase", revision, author, comment, build.started_at)
 
         change.buildersById[build.builderid].builds.push(build)
 
-    makeFakeChange: (codebase, revision, when_timestamp) =>
+    makeFakeChange: (codebase, revision, author, comment, when_timestamp) =>
         change = @changesBySSID[revision]
         if not change?
             change =
@@ -302,8 +326,8 @@ class Console extends Controller
                 revision: revision
                 changeid: revision
                 when_timestamp: when_timestamp
-                author: "unknown author for " + revision
-                comments: revision + "\n\nFake comment for revision: No change for this revision, please setup a changesource in Buildbot"
+                author: author
+                comments: revision + " \n\n" + comment
             @changesBySSID[revision] = change
             @populateChange(change)
         return change
