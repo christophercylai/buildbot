@@ -39,6 +39,7 @@ from buildbot.test.fake import fakemaster
 from buildbot.test.fake import fakeprotocol
 from buildbot.test.fake import worker
 from buildbot.test.fake.fakebuild import FakeBuildStatus
+from buildbot.test.util.misc import TestReactorMixin
 
 
 class FakeChange:
@@ -174,16 +175,17 @@ def makeControllableStepFactory():
     return controller, FakeStepFactory(step)
 
 
-class TestBuild(unittest.TestCase):
+class TestBuild(TestReactorMixin, unittest.TestCase):
 
     def setUp(self):
+        self.setUpTestReactor()
         r = FakeRequest()
         r.sources = [FakeSource()]
         r.sources[0].changes = [FakeChange()]
         r.sources[0].revision = "12345"
 
         self.request = r
-        self.master = fakemaster.make_master(wantData=True, testcase=self)
+        self.master = fakemaster.make_master(self, wantData=True)
 
         self.worker = worker.FakeWorker(self.master)
         self.worker.attached(None)
@@ -199,6 +201,10 @@ class TestBuild(unittest.TestCase):
         self.build.setBuilder(self.builder)
         self.build.text = []
         self.build.buildid = 666
+
+    def assertWorkerPreparationFailure(self, reason):
+        states = "".join(self.master.data.updates.stepStateString.values())
+        self.assertIn(states, reason)
 
     def testRunSuccessfulBuild(self):
         b = self.build
@@ -237,6 +243,7 @@ class TestBuild(unittest.TestCase):
         self.workerforbuilder.prepare = lambda _: False
         b.startBuild(FakeBuildStatus(), self.workerforbuilder)
         self.assertEqual(b.results, RETRY)
+        self.assertWorkerPreparationFailure('error while worker_prepare')
 
     def testBuildCancelledWhenWorkerPrepareReturnFalseBecauseBuildStop(self):
         b = self.build
@@ -250,6 +257,7 @@ class TestBuild(unittest.TestCase):
         b.stopBuild('Cancel Build', CANCELLED)
         d.callback(False)
         self.assertEqual(b.results, CANCELLED)
+        self.assertWorkerPreparationFailure('error while worker_prepare')
 
     def testBuildRetryWhenWorkerPrepareReturnFalseBecauseBuildStop(self):
         b = self.build
@@ -263,6 +271,7 @@ class TestBuild(unittest.TestCase):
         b.stopBuild('Cancel Build', RETRY)
         d.callback(False)
         self.assertEqual(b.results, RETRY)
+        self.assertWorkerPreparationFailure('error while worker_prepare')
 
     @defer.inlineCallbacks
     def testAlwaysRunStepStopBuild(self):
@@ -729,6 +738,7 @@ class TestBuild(unittest.TestCase):
             steps.append(step)
         return steps
 
+    @defer.inlineCallbacks
     def testAddStepsAfterCurrentStep(self):
         b = self.build
 
@@ -742,12 +752,13 @@ class TestBuild(unittest.TestCase):
         steps[1].startStep = startStepB
         b.setStepFactories([FakeStepFactory(s) for s in steps])
 
-        b.startBuild(FakeBuildStatus(), self.workerforbuilder)
+        yield b.startBuild(FakeBuildStatus(), self.workerforbuilder)
         self.assertEqual(b.results, SUCCESS)
         expected_names = ["a", "b", "d", "e", "c"]
         executed_names = [s.name for s in b.executedSteps]
         self.assertEqual(executed_names, expected_names)
 
+    @defer.inlineCallbacks
     def testAddStepsAfterLastStep(self):
         b = self.build
 
@@ -761,7 +772,7 @@ class TestBuild(unittest.TestCase):
         steps[1].startStep = startStepB
         b.setStepFactories([FakeStepFactory(s) for s in steps])
 
-        b.startBuild(FakeBuildStatus(), self.workerforbuilder)
+        yield b.startBuild(FakeBuildStatus(), self.workerforbuilder)
         self.assertEqual(b.results, SUCCESS)
         expected_names = ["a", "b", "c", "d", "e"]
         executed_names = [s.name for s in b.executedSteps]
@@ -962,7 +973,7 @@ class TestBuildBlameList(unittest.TestCase):
         self.assertEqual(blamelist, [])
 
 
-class TestSetupProperties_MultipleSources(unittest.TestCase):
+class TestSetupProperties_MultipleSources(TestReactorMixin, unittest.TestCase):
 
     """
     Test that the property values, based on the available requests, are
@@ -970,6 +981,7 @@ class TestSetupProperties_MultipleSources(unittest.TestCase):
     """
 
     def setUp(self):
+        self.setUpTestReactor()
         self.props = {}
         r = FakeRequest()
         r.sources = []
@@ -986,8 +998,7 @@ class TestSetupProperties_MultipleSources(unittest.TestCase):
         r.sources[1].revision = "34567"
         self.build = Build([r])
         self.build.setStepFactories([])
-        self.builder = FakeBuilder(
-            fakemaster.make_master(wantData=True, testcase=self))
+        self.builder = FakeBuilder(fakemaster.make_master(self, wantData=True))
         self.build.setBuilder(self.builder)
         self.build.build_status = FakeBuildStatus()
         # record properties that will be set
@@ -1009,7 +1020,7 @@ class TestSetupProperties_MultipleSources(unittest.TestCase):
         self.assertNotIn("repository", self.props["Build"])
 
 
-class TestSetupProperties_SingleSource(unittest.TestCase):
+class TestSetupProperties_SingleSource(TestReactorMixin, unittest.TestCase):
 
     """
     Test that the property values, based on the available requests, are
@@ -1017,6 +1028,7 @@ class TestSetupProperties_SingleSource(unittest.TestCase):
     """
 
     def setUp(self):
+        self.setUpTestReactor()
         self.props = {}
         r = FakeRequest()
         r.sources = []
@@ -1028,8 +1040,7 @@ class TestSetupProperties_SingleSource(unittest.TestCase):
         r.sources[0].revision = "12345"
         self.build = Build([r])
         self.build.setStepFactories([])
-        self.builder = FakeBuilder(
-            fakemaster.make_master(wantData=True, testcase=self))
+        self.builder = FakeBuilder(fakemaster.make_master(self, wantData=True))
         self.build.setBuilder(self.builder)
         self.build.build_status = FakeBuildStatus()
         # record properties that will be set
@@ -1068,7 +1079,7 @@ class TestSetupProperties_SingleSource(unittest.TestCase):
         self.assertEqual(project, '')
 
 
-class TestBuildProperties(unittest.TestCase):
+class TestBuildProperties(TestReactorMixin, unittest.TestCase):
 
     """
     Test that a Build has the necessary L{IProperties} methods, and that they
@@ -1077,6 +1088,8 @@ class TestBuildProperties(unittest.TestCase):
     """
 
     def setUp(self):
+        self.setUpTestReactor()
+
         @implementer(interfaces.IProperties)
         class FakeProperties(Mock):
             pass
@@ -1088,15 +1101,14 @@ class TestBuildProperties(unittest.TestCase):
         r.sources = [FakeSource()]
         r.sources[0].changes = [FakeChange()]
         r.sources[0].revision = "12345"
-        self.master = fakemaster.make_master(wantData=True, testcase=self)
+        self.master = fakemaster.make_master(self, wantData=True)
         self.worker = worker.FakeWorker(self.master)
         self.worker.attached(None)
         self.workerforbuilder = Mock(name='workerforbuilder')
         self.workerforbuilder.worker = self.worker
         self.build = Build([r])
         self.build.setStepFactories([])
-        self.builder = FakeBuilder(
-            fakemaster.make_master(wantData=True, testcase=self))
+        self.builder = FakeBuilder(fakemaster.make_master(self, wantData=True))
         self.build.setBuilder(self.builder)
         self.properties = self.build.properties = FakeProperties()
         self.build_status = FakeBuildStatus()

@@ -296,7 +296,7 @@ setup_args = {
             ('buildbot.steps.source.cvs', ['CVS']),
             ('buildbot.steps.source.darcs', ['Darcs']),
             ('buildbot.steps.source.gerrit', ['Gerrit']),
-            ('buildbot.steps.source.git', ['Git', 'GitTag']),
+            ('buildbot.steps.source.git', ['Git', 'GitCommit', 'GitPush', 'GitTag']),
             ('buildbot.steps.source.github', ['GitHub']),
             ('buildbot.steps.source.gitlab', ['GitLab']),
             ('buildbot.steps.source.mercurial', ['Mercurial']),
@@ -334,6 +334,7 @@ setup_args = {
             ('buildbot.reporters.bitbucketserver', ['BitbucketServerStatusPush', 'BitbucketServerPRCommentPush']),
             ('buildbot.reporters.bitbucket', ['BitbucketStatusPush']),
             ('buildbot.reporters.irc', ['IRC']),
+            ('buildbot.reporters.zulip', ['ZulipStatusPush']),
         ]),
         ('buildbot.util', [
             # Connection seems to be a way too generic name, though
