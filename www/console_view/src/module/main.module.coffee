@@ -20,7 +20,7 @@ class State extends Config
         glMenuServiceProvider.addGroup
             name: name
             caption: 'Console View'
-            icon: 'exclamation-circle'
+            icon: 'table'
             order: 5
 
         # Configuration
@@ -60,7 +60,7 @@ class State extends Config
             ]
 
 class Console extends Controller
-    constructor: (@$scope, $q, @$window, dataService, bbSettingsService, resultsService,
+    constructor: (@$scope, $q, @$window, dataService, bbSettingsService, resultsService, glTopbarContextualActionsService,
         @$uibModal, @$timeout) ->
         angular.extend this, resultsService
         settings = bbSettingsService.getSettingsGroup('Console')
