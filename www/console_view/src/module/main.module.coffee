@@ -55,7 +55,7 @@ class State extends Config
             ,
                 type: 'text'
                 name: 'defaultBranch'
-                caption: 'default branch to fetch'
+                caption: 'default branches to fetch (example: fff123_abc;inf321_def;trunk)'
                 default_value: "trunk"
             ]
 
@@ -147,14 +147,18 @@ class Console extends Controller
 
         #query example "http://buildmaster.financialcad.com/console?<branch>"
         url = window.location.href
-        branch = new URL(url).hash.split("?")[1]
-        if branch? is false
-            branch = @defaultBranch
+        branches = new URL(url).hash.split("?")[1]
+        if branches? is false
+            branches = @defaultBranch
+            branches = branches.split(';')
+        else
+            branches = [branches]
 
         for builder in all_builders
-            if builder.hasBuild and builder.name.includes(branch)
-                builders_with_builds.push(builder)
-                builderids_with_builds += "." + builder.builderid
+            for branch in branches
+                if builder.hasBuild and builder.name.includes(branch)
+                    builders_with_builds.push(builder)
+                    builderids_with_builds += "." + builder.builderid
 
         if builderids_with_builds == @last_builderids_with_builds
             # don't recalculate if it hasn't changed!
