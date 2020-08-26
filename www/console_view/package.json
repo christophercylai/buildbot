@@ -5,8 +5,8 @@
     "main": "buildbot_console_view/static/scripts.js",
     "style": "buildbot_console_view/static/styles.js",
     "scripts": {
-        "build": "rimraf buildbot_console_view/static && webpack --bail --progress --profile --env prod",
-        "build-dev": "rimraf buildbot_console_view/static && webpack --bail --progress --profile --env dev",
+        "build": "rimraf buildbot_console_view/static && mkdir -p buildbot_console_view/static && webpack --bail --progress --profile --env prod",
+        "build-dev": "rimraf buildbot_console_view/static && mkdir -p buildbot_console_view/static && webpack --bail --progress --profile --env dev",
         "dev": "webpack --bail --progress --profile --watch --env dev",
         "test": "karma start",
         "test-watch": "karma start --auto-watch --no-single-run"
