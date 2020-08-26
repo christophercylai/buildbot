@@ -26,12 +26,13 @@ from zope.interface import implementer
 from buildbot import config
 from buildbot import interfaces
 from buildbot.status import build
+from buildbot.test import fakedb
 from buildbot.test.fake import bworkermanager
 from buildbot.test.fake import fakedata
-from buildbot.test.fake import fakedb
 from buildbot.test.fake import fakemq
 from buildbot.test.fake import pbmanager
 from buildbot.test.fake.botmaster import FakeBotMaster
+from buildbot.test.fake.machine import FakeMachineManager
 from buildbot.util import service
 
 
@@ -87,7 +88,7 @@ class FakeStatus(service.BuildbotService):
         pass
 
     def getURLForBuild(self, builder_name, build_number):
-        return "URLForBuild/%s/%d" % (builder_name, build_number)
+        return "URLForBuild/{}/{}".format(builder_name, build_number)
 
     def getURLForBuildrequest(self, buildrequestid):
         return "URLForBuildrequest/%d" % (buildrequestid,)
@@ -183,9 +184,12 @@ class FakeMaster(service.MasterService):
         self.masterid = master_id
         self.workers = bworkermanager.FakeWorkerManager()
         self.workers.setServiceParent(self)
+        self.machine_manager = FakeMachineManager()
+        self.machine_manager.setServiceParent(self)
         self.log_rotation = FakeLogRotation()
         self.db = mock.Mock()
         self.next_objectid = 0
+        self.config_version = 0
 
         def getObjectId(sched_name, class_name):
             k = (sched_name, class_name)

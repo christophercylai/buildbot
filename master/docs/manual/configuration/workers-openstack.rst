@@ -72,6 +72,14 @@ These are the same details set in either environment variables or passed as opti
     The OpenStack authentication needed to create and delete instances.
     These are the same as the environment variables with uppercase names of the arguments.
 
+``os_auth_args``
+    Arguments passed directly to keystone.
+    If this is specified, other authentication parameters (see above) are ignored.
+    You can use ``auth_type`` to specify auth plugin to load.
+    See `OpenStack documentation <https://docs.openstack.org/python-keystoneclient/>` for more information.
+    Usually this should contain ``auth_url``, ``username``, ``password``, ``project_domain_name``
+    and ``user_domain_name``.
+
 ``block_devices``
     A list of dictionaries.
     Each dictionary specifies a block device to set up during instance creation.
@@ -126,7 +134,7 @@ These are the same details set in either environment variables or passed as opti
 
 Here is the simplest example of configuring an OpenStack latent worker.
 
-::
+.. code-block:: python
 
     from buildbot.plugins import worker
     c['workers'] = [
@@ -141,7 +149,7 @@ The ``image`` argument also supports being given a callable.
 The callable will be passed the list of available images and must return the image to use.
 The invocation happens in a separate thread to prevent blocking the build master when interacting with OpenStack.
 
-::
+.. code-block:: python
 
     from buildbot.plugins import worker
 
@@ -167,7 +175,7 @@ The ``block_devices`` argument is minimally manipulated to provide some defaults
 The simplest example is an image that is converted to a volume and the instance boots from that volume.
 When the instance is destroyed, the volume will be terminated as well.
 
-::
+.. code-block:: python
 
     from buildbot.plugins import worker
     c['workers'] = [
@@ -190,7 +198,7 @@ Other useful parameters are ``availability_zone``, ``security_groups`` and ``con
 Refer to `Python bindings to the OpenStack Nova API <http://docs.openstack.org/developer/python-novaclient/>`_ for more information.
 It is found on section Servers, method create.
 
-::
+.. code-block:: python
 
     from buildbot.plugins import worker
     c['workers'] = [

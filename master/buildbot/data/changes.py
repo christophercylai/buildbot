@@ -40,6 +40,9 @@ class FixerMixin:
             change['sourcestamp'] = yield self.master.data.get(sskey)
             del change['sourcestampid']
         return change
+    fieldMapping = {
+        'changeid': 'changes.id',
+    }
 
 
 class ChangeEndpoint(FixerMixin, base.Endpoint):
@@ -78,13 +81,9 @@ class ChangesEndpoint(FixerMixin, base.Endpoint):
             else:
                 changes = []
         else:
-            # this special case is useful and implemented by the dbapi
-            # so give it a boost
-            if (resultSpec.order == ('-changeid',) and resultSpec.limit and
-                    resultSpec.offset is None):
-                changes = yield self.master.db.changes.getRecentChanges(resultSpec.limit)
-            else:
-                changes = yield self.master.db.changes.getChanges()
+            if resultSpec is not None:
+                resultSpec.fieldMapping = self.fieldMapping
+                changes = yield self.master.db.changes.getChanges(resultSpec=resultSpec)
         results = []
         for ch in changes:
             results.append((yield self._fixChange(ch)))
@@ -104,6 +103,7 @@ class Change(base.ResourceType):
         changeid = types.Integer()
         parent_changeids = types.List(of=types.Integer())
         author = types.String()
+        committer = types.String()
         files = types.List(of=types.String())
         comments = types.String()
         revision = types.NoneOk(types.String())
@@ -120,7 +120,7 @@ class Change(base.ResourceType):
 
     @base.updateMethod
     @defer.inlineCallbacks
-    def addChange(self, files=None, comments=None, author=None, revision=None,
+    def addChange(self, files=None, comments=None, author=None, committer=None, revision=None,
                   when_timestamp=None, branch=None, category=None, revlink='',
                   properties=None, repository='', codebase=None, project='',
                   src=None):
@@ -146,6 +146,7 @@ class Change(base.ResourceType):
 
         if callable(category):
             pre_change = self.master.config.preChangeGenerator(author=author,
+                                                               committer=committer,
                                                                files=files,
                                                                comments=comments,
                                                                revision=revision,
@@ -161,6 +162,7 @@ class Change(base.ResourceType):
         if codebase is None \
                 and self.master.config.codebaseGenerator is not None:
             pre_change = self.master.config.preChangeGenerator(author=author,
+                                                               committer=committer,
                                                                files=files,
                                                                comments=comments,
                                                                revision=revision,
@@ -179,6 +181,7 @@ class Change(base.ResourceType):
         # add the Change to the database
         changeid = yield self.master.db.changes.addChange(
             author=author,
+            committer=committer,
             files=files,
             comments=comments,
             revision=revision,
@@ -198,7 +201,7 @@ class Change(base.ResourceType):
         self.produceEvent(change, 'new')
 
         # log, being careful to handle funny characters
-        msg = "added change with revision %s to database" % (revision,)
+        msg = "added change with revision {} to database".format(revision)
         log.msg(msg.encode('utf-8', 'replace'))
 
         return changeid

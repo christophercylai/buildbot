@@ -22,6 +22,7 @@ master/docs/buildbot.info-2
 .stgit-edit.txt
 .project
 .pydevproject
+.vscode
 .settings
 */build/
 master/docs/buildbot
@@ -39,8 +40,11 @@ _build
 *.egg
 .eggs/
 master/setuptools_trial*
-master/buildbot/www/static/js/default/
 sandbox
 sandbox.*
 .idea/
-/.venv/
+/.venv*/
+
+# www
+*/node_modules/
+node_modules

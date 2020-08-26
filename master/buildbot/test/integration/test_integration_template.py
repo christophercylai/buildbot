@@ -31,11 +31,13 @@ class ShellMaster(RunMasterBase):
         change = dict(branch="master",
                       files=["foo.c"],
                       author="me@foo.com",
+                      committer="me@foo.com",
                       comments="good stuff",
                       revision="HEAD",
                       project="none"
                       )
-        build = yield self.doForceBuild(wantSteps=True, useChange=change, wantLogs=True, wantProperties=True)
+        build = yield self.doForceBuild(wantSteps=True, useChange=change, wantLogs=True,
+                                        wantProperties=True)
         self.assertEqual(build['buildid'], 1)
         self.assertEqual(build['properties']['owners'], (['me@foo.com'], 'Build'))
 

@@ -13,27 +13,33 @@
 #
 # Copyright Buildbot Team Members
 
+from parameterized import parameterized
 
 from twisted.internet import defer
 from twisted.python.failure import Failure
 from twisted.spread import pb
 
 from buildbot.config import BuilderConfig
+from buildbot.config import MasterConfig
 from buildbot.interfaces import LatentWorkerCannotSubstantiate
 from buildbot.interfaces import LatentWorkerFailedToSubstantiate
 from buildbot.interfaces import LatentWorkerSubstantiatiationCancelled
+from buildbot.machine.latent import States as MachineStates
 from buildbot.process.factory import BuildFactory
 from buildbot.process.properties import Interpolate
 from buildbot.process.properties import Properties
 from buildbot.process.results import CANCELLED
 from buildbot.process.results import EXCEPTION
+from buildbot.process.results import FAILURE
 from buildbot.process.results import RETRY
 from buildbot.process.results import SUCCESS
 from buildbot.test.fake.latent import LatentController
+from buildbot.test.fake.machine import LatentMachineController
 from buildbot.test.fake.step import BuildStepController
 from buildbot.test.util.integration import RunFakeMasterTestCase
 from buildbot.test.util.misc import TimeoutableTestCase
 from buildbot.test.util.patch_delay import patchForDelay
+from buildbot.worker.latent import States
 
 
 class TestException(Exception):
@@ -43,7 +49,7 @@ class TestException(Exception):
     """
 
 
-class Tests(TimeoutableTestCase, RunFakeMasterTestCase):
+class Latent(TimeoutableTestCase, RunFakeMasterTestCase):
 
     def tearDown(self):
         # Flush the errors logged by the master stop cancelling the builds.
@@ -127,6 +133,15 @@ class Tests(TimeoutableTestCase, RunFakeMasterTestCase):
 
         return controller, master, builder_ids
 
+    def reconfig_workers_remove_all(self, master):
+        # returns a deferred that fires when the worker has been successfully removed
+        config_dict = {
+            'workers': [],
+            'multiMaster': True
+        }
+        config = MasterConfig.loadFromDict(config_dict, '<dict>')
+        return master.workers.reconfigServiceWithBuildbotConfig(config)
+
     @defer.inlineCallbacks
     def test_latent_workers_start_in_parallel(self):
         """
@@ -187,6 +202,8 @@ class Tests(TimeoutableTestCase, RunFakeMasterTestCase):
             set(brids),
             {req['buildrequestid'] for req in unclaimed_build_requests}
         )
+
+        yield self.assertBuildResults(1, RETRY)
         yield controller.auto_stop(True)
         self.flushLoggedErrors(LatentWorkerFailedToSubstantiate)
 
@@ -218,6 +235,7 @@ class Tests(TimeoutableTestCase, RunFakeMasterTestCase):
             set(brids),
             {req['buildrequestid'] for req in unclaimed_build_requests}
         )
+        yield self.assertBuildResults(1, RETRY)
         yield controller.auto_stop(True)
 
     @defer.inlineCallbacks
@@ -282,12 +300,17 @@ class Tests(TimeoutableTestCase, RunFakeMasterTestCase):
         # Flush the errors logged by the failure.
         self.flushLoggedErrors(TestException)
 
+        yield self.assertBuildResults(1, RETRY)
+
         # advance the time to the point where we should not retry
         master.reactor.advance(controller.worker.quarantine_initial_timeout)
         self.assertEqual(controller.starting, False)
         # advance the time to the point where we should retry
         master.reactor.advance(controller.worker.quarantine_initial_timeout)
         self.assertEqual(controller.starting, True)
+
+        controller.auto_start(True)
+        controller.auto_stop(True)
 
     @defer.inlineCallbacks
     def test_worker_multiple_substantiations_succeed(self):
@@ -430,6 +453,110 @@ class Tests(TimeoutableTestCase, RunFakeMasterTestCase):
         yield controller.stop_instance(True)
 
     @defer.inlineCallbacks
+    def test_insubstantiation_during_substantiation_refuses_substantiation(self):
+        """
+        If a latent worker gets insubstantiation() during substantiation, then it should refuse
+        to substantiate.
+        """
+        controller, master, builder_id = yield self.create_single_worker_config(
+            controller_kwargs=dict(build_wait_timeout=1))
+
+        # insubstantiate during start_instance(). Note that failed substantiation is notified only
+        # after the latent workers completes start-stop cycle.
+        yield self.createBuildrequest(master, [builder_id])
+        d = controller.worker.insubstantiate()
+        controller.start_instance(False)
+        controller.stop_instance(True)
+        yield d
+
+        yield self.assertBuildResults(1, RETRY)
+
+    @defer.inlineCallbacks
+    def test_stopservice_during_insubstantiation_completes(self):
+        """
+        When stopService is called and a worker is insubstantiating, we should wait for this
+        process to complete.
+        """
+        controller, master, builder_id = yield self.create_single_worker_config(
+            controller_kwargs=dict(build_wait_timeout=1))
+
+        # Substantiate worker via a build
+        yield self.createBuildrequest(master, [builder_id])
+        yield controller.start_instance(True)
+
+        yield self.assertBuildResults(1, SUCCESS)
+        self.assertTrue(controller.started)
+
+        # Wait until worker starts insubstantiation and then shutdown worker
+        self.reactor.advance(1)
+        self.assertTrue(controller.stopping)
+
+        d = self.reconfig_workers_remove_all(master)
+        self.assertFalse(d.called)
+        yield controller.stop_instance(True)
+        yield d
+
+    @parameterized.expand([
+        ('with_substantiation_failure', False, False),
+        ('without_worker_connecting', True, False),
+        ('with_worker_connecting', True, True),
+    ])
+    @defer.inlineCallbacks
+    def test_stopservice_during_substantiation_completes(self, name, subst_success,
+                                                         worker_connects):
+        """
+        When stopService is called and a worker is substantiating, we should wait for this
+        process to complete.
+        """
+        controller, master, builder_id = yield self.create_single_worker_config(
+            controller_kwargs=dict(build_wait_timeout=1))
+        controller.auto_connect_worker = worker_connects
+
+        # Substantiate worker via a build
+        yield self.createBuildrequest(master, [builder_id])
+        self.assertTrue(controller.starting)
+
+        d = self.reconfig_workers_remove_all(master)
+        self.assertFalse(d.called)
+
+        yield controller.start_instance(subst_success)
+
+        # we should stop the instance immediately after it substantiates regardless of the result
+        self.assertTrue(controller.stopping)
+
+        yield controller.stop_instance(True)
+        yield d
+
+    @defer.inlineCallbacks
+    def test_substantiation_cancelled_by_insubstantiation_when_waiting_for_insubstantiation(self):
+        """
+        We should cancel substantiation if we insubstantiate when that substantiation is waiting
+        on current insubstantiation to finish
+        """
+        controller, master, builder_id = yield self.create_single_worker_config(
+            controller_kwargs=dict(build_wait_timeout=1))
+
+        yield self.createBuildrequest(master, [builder_id])
+
+        # put the worker into insubstantiation phase
+        controller.start_instance(True)
+        yield self.assertBuildResults(1, SUCCESS)
+
+        self.reactor.advance(1)
+        self.assertTrue(controller.stopping)
+
+        # build should wait on the insubstantiation
+        yield self.createBuildrequest(master, [builder_id])
+        self.assertEqual(controller.worker.state, States.INSUBSTANTIATING_SUBSTANTIATING)
+
+        # build should be requeued if we insubstantiate.
+        d = controller.worker.insubstantiate()
+        controller.stop_instance(True)
+        yield d
+
+        yield self.assertBuildResults(2, RETRY)
+
+    @defer.inlineCallbacks
     def test_stalled_substantiation_then_timeout_get_requeued(self):
         """
         If a latent worker substantiate, but not connect, and then be
@@ -456,6 +583,7 @@ class Tests(TimeoutableTestCase, RunFakeMasterTestCase):
             set(brids),
             {req['buildrequestid'] for req in unclaimed_build_requests}
         )
+        yield controller.start_instance(False)
         yield controller.auto_stop(True)
 
     @defer.inlineCallbacks
@@ -472,7 +600,8 @@ class Tests(TimeoutableTestCase, RunFakeMasterTestCase):
         bsid, brids = yield self.createBuildrequest(master, [builder_id])
 
         # sever connection just before ping()
-        with patchForDelay('buildbot.process.workerforbuilder.AbstractWorkerForBuilder.ping') as delay:
+        with patchForDelay(
+                'buildbot.process.workerforbuilder.AbstractWorkerForBuilder.ping') as delay:
             yield controller.start_instance(True)
             controller.sever_connection()
             delay.fire()
@@ -619,8 +748,7 @@ class Tests(TimeoutableTestCase, RunFakeMasterTestCase):
         yield controller.disconnect_worker()
         yield self.assertBuildResults(1, RETRY)
 
-        # Request one build.
-        yield self.createBuildrequest(master, [builder_id])
+        # Now check that the build requeued and finished with success
         controller.start_instance(True)
 
         yield self.assertBuildResults(2, None)
@@ -862,6 +990,62 @@ class Tests(TimeoutableTestCase, RunFakeMasterTestCase):
         yield controller.auto_stop(True)
 
     @defer.inlineCallbacks
+    def test_negative_build_timeout_insubstantiates_on_master_shutdown(self):
+        """
+        When build_wait_timeout is negative, we should still insubstantiate when master shuts down.
+        """
+        controller, master, builder_id = yield self.create_single_worker_config(
+            controller_kwargs=dict(build_wait_timeout=-1))
+
+        # Substantiate worker via a build
+        yield self.createBuildrequest(master, [builder_id])
+        yield controller.start_instance(True)
+
+        yield self.assertBuildResults(1, SUCCESS)
+        self.assertTrue(controller.started)
+
+        # Shutdown master
+        d = master.stopService()
+        yield controller.stop_instance(True)
+        yield d
+
+    @defer.inlineCallbacks
+    def test_stop_instance_synchronous_exception(self):
+        """
+        Throwing a synchronous exception from stop_instance should allow subsequent build to start.
+        """
+        controller, master, builder_id = yield self.create_single_worker_config(
+            controller_kwargs=dict(build_wait_timeout=1))
+
+        controller.auto_stop(True)
+
+        # patch stop_instance() to raise exception synchronously
+        def raise_stop_instance(fast):
+            raise TestException()
+
+        real_stop_instance = controller.worker.stop_instance
+        controller.worker.stop_instance = raise_stop_instance
+
+        # create a build and wait for stop
+        yield self.createBuildrequest(master, [builder_id])
+        yield controller.start_instance(True)
+        self.reactor.advance(1)
+        yield self.assertBuildResults(1, SUCCESS)
+        self.flushLoggedErrors(TestException)
+
+        # unpatch stop_instance() and call it to cleanup state of fake worker controller
+        controller.worker.stop_instance = real_stop_instance
+        yield controller.worker.stop_instance(False)
+
+        self.reactor.advance(1)
+
+        # subsequent build should succeed
+        yield self.createBuildrequest(master, [builder_id])
+        yield controller.start_instance(True)
+        self.reactor.advance(1)
+        yield self.assertBuildResults(2, SUCCESS)
+
+    @defer.inlineCallbacks
     def test_build_stop_with_cancelled_during_substantiation(self):
         """
         If a build is stopping during latent worker substantiating, the build
@@ -1040,8 +1224,9 @@ class Tests(TimeoutableTestCase, RunFakeMasterTestCase):
         controller.start_instance(True)
         self.assertTrue(controller.started)
 
-        controller.worker.insubstantiate()
+        d = controller.worker.insubstantiate()
         controller.stop_instance(True)
+        yield d
 
     @defer.inlineCallbacks
     def test_supports_no_build_for_substantiation_accepts_build_later(self):
@@ -1062,3 +1247,334 @@ class Tests(TimeoutableTestCase, RunFakeMasterTestCase):
 
         self.reactor.advance(1)
         controller.stop_instance(True)
+
+
+class LatentWithLatentMachine(TimeoutableTestCase, RunFakeMasterTestCase):
+
+    def tearDown(self):
+        # Flush the errors logged by the master stop cancelling the builds.
+        self.flushLoggedErrors(LatentWorkerSubstantiatiationCancelled)
+        super().tearDown()
+
+    @defer.inlineCallbacks
+    def create_single_worker_config(self, build_wait_timeout=0):
+        machine_controller = LatentMachineController(
+            name='machine1',
+            build_wait_timeout=build_wait_timeout)
+
+        worker_controller = LatentController(self, 'worker1',
+                                             machine_name='machine1')
+        step_controller = BuildStepController()
+
+        config_dict = {
+            'machines': [machine_controller.machine],
+            'builders': [
+                BuilderConfig(name="builder1",
+                              workernames=["worker1"],
+                              factory=BuildFactory([step_controller.step]),
+                              ),
+            ],
+            'workers': [worker_controller.worker],
+            'protocols': {'null': {}},
+            # Disable checks about missing scheduler.
+            'multiMaster': True,
+        }
+
+        master = yield self.getMaster(config_dict)
+        builder_id = yield master.data.updates.findBuilderId('builder1')
+
+        return (machine_controller, worker_controller, step_controller,
+                master, builder_id)
+
+    @defer.inlineCallbacks
+    def create_two_worker_config(self, build_wait_timeout=0,
+                                 controller_kwargs=None):
+        if not controller_kwargs:
+            controller_kwargs = {}
+
+        machine_controller = LatentMachineController(
+            name='machine1',
+            build_wait_timeout=build_wait_timeout)
+
+        worker1_controller = LatentController(self, 'worker1',
+                                              machine_name='machine1',
+                                              **controller_kwargs)
+        worker2_controller = LatentController(self, 'worker2',
+                                              machine_name='machine1',
+                                              **controller_kwargs)
+        step1_controller = BuildStepController()
+        step2_controller = BuildStepController()
+
+        config_dict = {
+            'machines': [machine_controller.machine],
+            'builders': [
+                BuilderConfig(name="builder1",
+                              workernames=["worker1"],
+                              factory=BuildFactory([step1_controller.step]),
+                              ),
+                BuilderConfig(name="builder2",
+                              workernames=["worker2"],
+                              factory=BuildFactory([step2_controller.step]),
+                              ),
+            ],
+            'workers': [worker1_controller.worker,
+                        worker2_controller.worker],
+            'protocols': {'null': {}},
+            # Disable checks about missing scheduler.
+            'multiMaster': True,
+        }
+
+        master = yield self.getMaster(config_dict)
+        builder1_id = yield master.data.updates.findBuilderId('builder1')
+        builder2_id = yield master.data.updates.findBuilderId('builder2')
+
+        return (machine_controller,
+                [worker1_controller, worker2_controller],
+                [step1_controller, step2_controller],
+                master,
+                [builder1_id, builder2_id])
+
+    @defer.inlineCallbacks
+    def test_1worker_starts_and_stops_after_single_build_success(self):
+        machine_controller, worker_controller, step_controller, \
+            master, builder_id = yield self.create_single_worker_config()
+
+        worker_controller.auto_start(True)
+        worker_controller.auto_stop(True)
+
+        yield self.createBuildrequest(master, [builder_id])
+        machine_controller.start_machine(True)
+        self.assertTrue(worker_controller.started)
+
+        step_controller.finish_step(SUCCESS)
+        self.reactor.advance(0)  # force deferred suspend call to be executed
+        machine_controller.stop_machine()
+
+        self.assertEqual(machine_controller.machine.state,
+                         MachineStates.STOPPED)
+
+    @defer.inlineCallbacks
+    def test_1worker_starts_and_stops_after_single_build_failure(self):
+        machine_controller, worker_controller, step_controller, \
+            master, builder_id = yield self.create_single_worker_config()
+
+        worker_controller.auto_start(True)
+        worker_controller.auto_stop(True)
+
+        yield self.createBuildrequest(master, [builder_id])
+        machine_controller.start_machine(True)
+        self.assertTrue(worker_controller.started)
+
+        step_controller.finish_step(FAILURE)
+        self.reactor.advance(0)  # force deferred stop call to be executed
+        machine_controller.stop_machine()
+
+        self.assertEqual(machine_controller.machine.state,
+                         MachineStates.STOPPED)
+
+    @defer.inlineCallbacks
+    def test_1worker_stops_machine_after_timeout(self):
+        machine_controller, worker_controller, step_controller, \
+            master, builder_id = yield self.create_single_worker_config(
+                build_wait_timeout=5)
+
+        worker_controller.auto_start(True)
+        worker_controller.auto_stop(True)
+
+        yield self.createBuildrequest(master, [builder_id])
+
+        machine_controller.start_machine(True)
+        self.reactor.advance(10.0)
+        step_controller.finish_step(SUCCESS)
+        self.assertEqual(machine_controller.machine.state,
+                         MachineStates.STARTED)
+
+        self.reactor.advance(4.9)
+        self.assertEqual(machine_controller.machine.state,
+                         MachineStates.STARTED)
+
+        # put clock 5s after step finish, machine should start suspending
+        self.reactor.advance(0.1)
+        self.assertEqual(machine_controller.machine.state,
+                         MachineStates.STOPPING)
+
+        machine_controller.stop_machine()
+
+        self.assertEqual(machine_controller.machine.state,
+                         MachineStates.STOPPED)
+
+    @defer.inlineCallbacks
+    def test_1worker_does_not_stop_machine_machine_after_timeout_during_build(self):
+        machine_controller, worker_controller, step_controller, \
+            master, builder_id = yield self.create_single_worker_config(
+                build_wait_timeout=5)
+
+        worker_controller.auto_start(True)
+        worker_controller.auto_stop(True)
+
+        yield self.createBuildrequest(master, [builder_id])
+
+        machine_controller.start_machine(True)
+        self.reactor.advance(10.0)
+        step_controller.finish_step(SUCCESS)
+        self.assertEqual(machine_controller.machine.state,
+                         MachineStates.STARTED)
+
+        # create build request while machine is still awake. It should not
+        # suspend regardless of how much time passes
+        self.reactor.advance(4.9)
+        self.assertEqual(machine_controller.machine.state,
+                         MachineStates.STARTED)
+        yield self.createBuildrequest(master, [builder_id])
+
+        self.reactor.advance(5.1)
+        self.assertEqual(machine_controller.machine.state,
+                         MachineStates.STARTED)
+
+        step_controller.finish_step(SUCCESS)
+        self.reactor.advance(4.9)
+        self.assertEqual(machine_controller.machine.state,
+                         MachineStates.STARTED)
+
+        # put clock 5s after step finish, machine should start suspending
+        self.reactor.advance(0.1)
+        self.assertEqual(machine_controller.machine.state,
+                         MachineStates.STOPPING)
+
+        machine_controller.stop_machine()
+
+        self.assertEqual(machine_controller.machine.state,
+                         MachineStates.STOPPED)
+
+    @defer.inlineCallbacks
+    def test_1worker_insubstantiated_after_start_failure(self):
+        machine_controller, worker_controller, step_controller, \
+            master, builder_id = yield self.create_single_worker_config()
+
+        worker_controller.auto_connect_worker = False
+        worker_controller.auto_start(True)
+        worker_controller.auto_stop(True)
+
+        yield self.createBuildrequest(master, [builder_id])
+
+        machine_controller.start_machine(False)
+        self.assertEqual(machine_controller.machine.state,
+                         MachineStates.STOPPED)
+        self.assertEqual(worker_controller.started, False)
+
+    @defer.inlineCallbacks
+    def test_1worker_eats_exception_from_start_machine(self):
+        machine_controller, worker_controller, step_controller, \
+            master, builder_id = yield self.create_single_worker_config()
+
+        worker_controller.auto_connect_worker = False
+        worker_controller.auto_start(True)
+        worker_controller.auto_stop(True)
+
+        yield self.createBuildrequest(master, [builder_id])
+
+        class FakeError(Exception):
+            pass
+
+        machine_controller.start_machine(FakeError('start error'))
+        self.assertEqual(machine_controller.machine.state,
+                         MachineStates.STOPPED)
+        self.assertEqual(worker_controller.started, False)
+
+        self.flushLoggedErrors(FakeError)
+
+    @defer.inlineCallbacks
+    def test_1worker_eats_exception_from_stop_machine(self):
+        machine_controller, worker_controller, step_controller, \
+            master, builder_id = yield self.create_single_worker_config()
+
+        worker_controller.auto_start(True)
+        worker_controller.auto_stop(True)
+
+        yield self.createBuildrequest(master, [builder_id])
+
+        machine_controller.start_machine(True)
+        step_controller.finish_step(SUCCESS)
+        self.reactor.advance(0)  # force deferred suspend call to be executed
+
+        class FakeError(Exception):
+            pass
+
+        machine_controller.stop_machine(FakeError('stop error'))
+
+        self.assertEqual(machine_controller.machine.state,
+                         MachineStates.STOPPED)
+        self.flushLoggedErrors(FakeError)
+
+    @defer.inlineCallbacks
+    def test_2workers_build_substantiates_insubstantiates_both_workers(self):
+        machine_controller, worker_controllers, step_controllers, \
+            master, builder_ids = yield self.create_two_worker_config(
+                controller_kwargs=dict(starts_without_substantiate=True))
+
+        for wc in worker_controllers:
+            wc.auto_start(True)
+            wc.auto_stop(True)
+
+        yield self.createBuildrequest(master, [builder_ids[0]])
+
+        machine_controller.start_machine(True)
+        for wc in worker_controllers:
+            self.assertTrue(wc.started)
+
+        step_controllers[0].finish_step(SUCCESS)
+        self.reactor.advance(0)  # force deferred suspend call to be executed
+        machine_controller.stop_machine()
+
+        for wc in worker_controllers:
+            self.assertFalse(wc.started)
+        self.assertEqual(machine_controller.machine.state,
+                         MachineStates.STOPPED)
+
+    @defer.inlineCallbacks
+    def test_2workers_two_builds_start_machine_concurrently(self):
+        machine_controller, worker_controllers, step_controllers, \
+            master, builder_ids = yield self.create_two_worker_config()
+
+        for wc in worker_controllers:
+            wc.auto_start(True)
+            wc.auto_stop(True)
+
+        yield self.createBuildrequest(master, [builder_ids[0]])
+        self.assertEqual(machine_controller.machine.state,
+                         MachineStates.STARTING)
+
+        yield self.createBuildrequest(master, [builder_ids[1]])
+
+        machine_controller.start_machine(True)
+        for wc in worker_controllers:
+            self.assertTrue(wc.started)
+
+        step_controllers[0].finish_step(SUCCESS)
+        step_controllers[1].finish_step(SUCCESS)
+        self.reactor.advance(0)  # force deferred suspend call to be executed
+        machine_controller.stop_machine()
+
+        for wc in worker_controllers:
+            self.assertFalse(wc.started)
+        self.assertEqual(machine_controller.machine.state,
+                         MachineStates.STOPPED)
+
+    @defer.inlineCallbacks
+    def test_2workers_insubstantiated_after_one_start_failure(self):
+        machine_controller, worker_controllers, step_controllers, \
+            master, builder_ids = yield self.create_two_worker_config()
+
+        for wc in worker_controllers:
+            wc.auto_connect_worker = False
+            wc.auto_start(True)
+            wc.auto_stop(True)
+
+        yield self.createBuildrequest(master, [builder_ids[0]])
+
+        machine_controller.start_machine(False)
+        self.assertEqual(machine_controller.machine.state,
+                         MachineStates.STOPPED)
+
+        for wc in worker_controllers:
+            self.assertEqual(wc.started, False)

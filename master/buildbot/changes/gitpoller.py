@@ -42,22 +42,18 @@ class GitPoller(base.PollingChangeSource, StateMixin, GitMixin):
     """This source will poll a remote git repo for changes and submit
     them to the change master."""
 
-    compare_attrs = ("repourl", "branches", "workdir",
-                     "pollInterval", "gitbin", "usetimestamps",
-                     "category", "project", "pollAtLaunch",
-                     "buildPushesWithNoCommits", "sshPrivateKey", "sshHostKey",
-                     "sshKnownHosts")
+    compare_attrs = ("repourl", "branches", "workdir", "pollInterval", "gitbin", "usetimestamps",
+                     "category", "project", "pollAtLaunch", "buildPushesWithNoCommits",
+                     "sshPrivateKey", "sshHostKey", "sshKnownHosts", "pollRandomDelayMin",
+                     "pollRandomDelayMax")
 
     secrets = ("sshPrivateKey", "sshHostKey", "sshKnownHosts")
 
-    def __init__(self, repourl, branches=None, branch=None,
-                 workdir=None, pollInterval=10 * 60,
-                 gitbin='git', usetimestamps=True,
-                 category=None, project=None,
-                 pollinterval=-2, fetch_refspec=None,
-                 encoding='utf-8', name=None, pollAtLaunch=False,
-                 buildPushesWithNoCommits=False, only_tags=False,
-                 sshPrivateKey=None, sshHostKey=None, sshKnownHosts=None):
+    def __init__(self, repourl, branches=None, branch=None, workdir=None, pollInterval=10 * 60,
+                 gitbin="git", usetimestamps=True, category=None, project=None, pollinterval=-2,
+                 fetch_refspec=None, encoding="utf-8", name=None, pollAtLaunch=False,
+                 buildPushesWithNoCommits=False, only_tags=False, sshPrivateKey=None,
+                 sshHostKey=None, sshKnownHosts=None, pollRandomDelayMin=0, pollRandomDelayMax=0):
 
         # for backward compatibility; the parameter used to be spelled with 'i'
         if pollinterval != -2:
@@ -66,12 +62,10 @@ class GitPoller(base.PollingChangeSource, StateMixin, GitMixin):
         if name is None:
             name = repourl
 
-        super().__init__(name=name,
-                         pollInterval=pollInterval,
-                         pollAtLaunch=pollAtLaunch,
-                         sshPrivateKey=sshPrivateKey,
-                         sshHostKey=sshHostKey,
-                         sshKnownHosts=sshKnownHosts)
+        super().__init__(name=name, pollInterval=pollInterval, pollAtLaunch=pollAtLaunch,
+                         pollRandomDelayMin=pollRandomDelayMin,
+                         pollRandomDelayMax=pollRandomDelayMax, sshPrivateKey=sshPrivateKey,
+                         sshHostKey=sshHostKey, sshKnownHosts=sshKnownHosts)
 
         if project is None:
             project = ''
@@ -247,8 +241,8 @@ class GitPoller(base.PollingChangeSource, StateMixin, GitMixin):
                 try:
                     stamp = int(git_output)
                 except Exception as e:
-                    log.msg(
-                        'gitpoller: caught exception converting output \'{}\' to timestamp'.format(git_output))
+                    log.msg(('gitpoller: caught exception converting output \'{}\' to timestamp'
+                             ).format(git_output))
                     raise e
                 return stamp
             return None
@@ -286,6 +280,14 @@ class GitPoller(base.PollingChangeSource, StateMixin, GitMixin):
         return d
 
     @defer.inlineCallbacks
+    def _get_commit_committer(self, rev):
+        args = ['--no-walk', r'--format=%cN <%cE>', rev, '--']
+        res = yield self._dovccmd('log', args, path=self.workdir)
+        if not res:
+            raise EnvironmentError('could not get commit committer for rev')
+        return res
+
+    @defer.inlineCallbacks
     def _process_changes(self, newRev, branch):
         """
         Read changes since last change.
@@ -298,24 +300,10 @@ class GitPoller(base.PollingChangeSource, StateMixin, GitMixin):
         # initial run, don't parse all history
         if not self.lastRev:
             return
-        rebuild = False
-        if newRev in self.lastRev.values():
-            if self.buildPushesWithNoCommits:
-                existingRev = self.lastRev.get(branch)
-                if existingRev is None:
-                    # This branch was completely unknown, rebuild
-                    log.msg('gitpoller: rebuilding {} for new branch "{}"'.format(
-                            newRev, branch))
-                    rebuild = True
-                elif existingRev != newRev:
-                    # This branch is known, but it now points to a different
-                    # commit than last time we saw it, rebuild.
-                    log.msg('gitpoller: rebuilding {} for updated branch "{}"'.format(
-                            newRev, branch))
-                    rebuild = True
 
         # get the change list
-        revListArgs = (['--format=%H', '{}'.format(newRev)] +
+        revListArgs = (['--ignore-missing'] +
+                       ['--format=%H', '{}'.format(newRev)] +
                        ['^' + rev
                         for rev in sorted(self.lastRev.values())] +
                        ['--'])
@@ -326,8 +314,19 @@ class GitPoller(base.PollingChangeSource, StateMixin, GitMixin):
         revList = results.split()
         revList.reverse()
 
-        if rebuild and not revList:
-            revList = [newRev]
+        if self.buildPushesWithNoCommits and not revList:
+            existingRev = self.lastRev.get(branch)
+            if existingRev != newRev:
+                revList = [newRev]
+                if existingRev is None:
+                    # This branch was completely unknown, rebuild
+                    log.msg('gitpoller: rebuilding {} for new branch "{}"'.format(
+                        newRev, branch))
+                else:
+                    # This branch is known, but it now points to a different
+                    # commit than last time we saw it, rebuild.
+                    log.msg('gitpoller: rebuilding {} for updated branch "{}"'.format(
+                        newRev, branch))
 
         self.changeCount = len(revList)
         self.lastRev[branch] = newRev
@@ -340,6 +339,7 @@ class GitPoller(base.PollingChangeSource, StateMixin, GitMixin):
             dl = defer.DeferredList([
                 self._get_commit_timestamp(rev),
                 self._get_commit_author(rev),
+                self._get_commit_committer(rev),
                 self._get_commit_files(rev),
                 self._get_commit_comments(rev),
             ], consumeErrors=True)
@@ -355,10 +355,11 @@ class GitPoller(base.PollingChangeSource, StateMixin, GitMixin):
                 # just fail on the first error; they're probably all related!
                 failures[0].raiseException()
 
-            timestamp, author, files, comments = [r[1] for r in results]
+            timestamp, author, committer, files, comments = [r[1] for r in results]
 
             yield self.master.data.updates.addChange(
                 author=author,
+                committer=committer,
                 revision=bytes2unicode(rev, encoding=self.encoding),
                 files=files, comments=comments, when_timestamp=timestamp,
                 branch=bytes2unicode(self._removeHeads(branch)),
@@ -433,6 +434,6 @@ class GitPoller(base.PollingChangeSource, StateMixin, GitMixin):
             if code == 128:
                 raise GitError('command {} in {} on repourl {} failed with exit code {}: {}'.format(
                                full_args, path, self.repourl, code, stderr))
-            raise EnvironmentError('command {} in {} on repourl {} failed with exit code {}: {}'.format(
-                                   full_args, path, self.repourl, code, stderr))
+            raise EnvironmentError(('command {} in {} on repourl {} failed with exit code {}: {}'
+                                    ).format(full_args, path, self.repourl, code, stderr))
         return stdout.strip()

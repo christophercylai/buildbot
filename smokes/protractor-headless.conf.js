@@ -1,7 +1,10 @@
 const { SpecReporter } = require('jasmine-spec-reporter');
 
 exports.config = {
-    allScriptsTimeout: 11000,
+    // when running tests on a heavily loaded maching (which is the case on e.g. CI server),
+    // Buildbot master sometimes takes a lot of time to respond to certain queries during tests.
+    // The following timeout is increased to avoid test instabilities in such cases
+    allScriptsTimeout: 30000,
 
     specs: [
         'e2e/*.scenarios.ts'
@@ -18,7 +21,11 @@ exports.config = {
     capabilities: {
         'browserName': 'chrome',
         'chromeOptions': {
-            'args': ['--headless', '--disable-gpu', '--no-sandbox', '--window-size=1024,768']
+            'args': [
+                '--headless',
+                '--window-size=1200,1024',
+                '--user-agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/56.0.2924.87"',
+            ]
         }
     },
 
@@ -41,10 +48,15 @@ exports.config = {
 
     onPrepare() {
         jasmine.getEnv().addReporter(new SpecReporter({
-            displayFailuresSummary: true,
-            displayFailuredSpec: true,
-            displaySuiteNumber: true,
-            displaySpecDuration: true
+            spec: {
+                displayFailed: true,
+                displayDuration: true,
+                displayStacktrace: true
+            },
+            summary: {
+                displayFailed: true,
+                displayStacktrace: true
+            }
         }));
 
         require('ts-node').register({

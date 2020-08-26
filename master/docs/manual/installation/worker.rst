@@ -96,7 +96,8 @@ To use these, just include them on the ``buildbot-worker create-worker`` command
 
 .. code-block:: bash
 
-    buildbot-worker create-worker --umask=0o22 ~/worker buildmaster.example.org:42012 {myworkername} {mypasswd}
+    buildbot-worker create-worker --umask=0o22 ~/worker buildmaster.example.org:42012 \
+        {myworkername} {mypasswd}
 
 .. program:: buildbot-worker create-worker
 
@@ -109,8 +110,8 @@ To use these, just include them on the ``buildbot-worker create-worker`` command
 
     This is a string (generally an octal representation of an integer) which will cause the worker process' ``umask`` value to be set shortly after initialization.
     The ``twistd`` daemonization utility forces the umask to 077 at startup (which means that all files created by the worker or its child processes will be unreadable by any user other than the worker account).
-    If you want build products to be readable by other accounts, you can add ``--umask=022`` to tell the worker to fix the umask after twistd clobbers it.
-    If you want build products to be *writable* by other accounts too, use ``--umask=000``, but this is likely to be a security problem.
+    If you want build products to be readable by other accounts, you can add ``--umask=0o22`` to tell the worker to fix the umask after twistd clobbers it.
+    If you want build products to be *writable* by other accounts too, use ``--umask=0o000``, but this is likely to be a security problem.
 
 .. option:: --keepalive
 
@@ -165,6 +166,18 @@ To use these, just include them on the ``buildbot-worker create-worker`` command
 
     Both master and worker must be at least version 0.8.3 for this feature to work.
 
+.. option:: --use-tls
+
+    Can also be passed directly to the Worker constructor in :file:`buildbot.tac`.
+    If set, the generated connection string starts with ``tls`` instead of with ``tcp``, allowing encrypted connection to the buildmaster.
+    Make sure the worker trusts the buildmasters certificate. If you have an non-authoritative certificate (CA is self-signed) see ``connection_string`` below.
+
+.. option:: --delete-leftover-dirs
+
+    Can also be passed directly to the Worker constructor in :file:`buildbot.tac`.
+    If set, unexpected directories in worker base directory will be removed.
+    Otherwise, a warning will be displayed in :file:`twistd.log` so that you can manually remove them.
+
 .. _Other-Worker-Configuration:
 
 Other Worker Configuration
@@ -187,6 +200,10 @@ Other Worker Configuration
 
 Worker TLS Configuration
 ~~~~~~~~~~~~~~~~~~~~~~~~
+
+``tls``
+    See ``--useTls`` option above as an alternative to setting the ``conneciton_string`` manually.
+
 
 ``connection_string``
     For TLS connections to the master the ``connection_string``-argument must be used to ``Worker.__init__`` function. ``buildmaster_host`` and ``port`` must then be ``None``.
@@ -268,93 +285,3 @@ Worker TLS Configuration
 
 .. _ConnectionStrings: https://twistedmatrix.com/documents/current/core/howto/endpoints.html
 .. _clientFromString: https://twistedmatrix.com/documents/current/api/twisted.internet.endpoints.clientFromString.html
-
-.. _Upgrading-an-Existing-Worker:
-
-Upgrading an Existing Worker
-----------------------------
-
-.. _Worker-Version-specific-Notes:
-
-Version-specific Notes
-~~~~~~~~~~~~~~~~~~~~~~
-
-During project lifetime worker has transitioned over few states:
-
-1. Before Buildbot version 0.8.1 worker were integral part of ``buildbot`` package distribution.
-2. Starting from Buildbot version 0.8.1 worker were extracted from ``buildbot`` package to ``buildbot-slave`` package.
-3. Starting from Buildbot version 0.9.0 the ``buildbot-slave`` package was renamed to ``buildbot-worker``.
-
-Upgrading a Worker to buildbot-slave 0.8.1
-''''''''''''''''''''''''''''''''''''''''''
-
-Before Buildbot version 0.8.1, the Buildbot master and worker were part of the same distribution.
-As of version 0.8.1, the worker is a separate distribution.
-
-As of this release, you will need to install ``buildbot-slave`` to run a worker.
-
-Any automatic startup scripts that had run ``buildbot start`` for previous versions should be changed to run ``buildslave start`` instead.
-
-If you are running a version later than 0.8.1, then you can skip the remainder of this section: the ``upgrade-slave`` command will take care of this.
-If you are upgrading directly to 0.8.1, read on.
-
-The existing :file:`buildbot.tac` for any workers running older versions will need to be edited or replaced.
-If the loss of cached worker state (e.g., for Source steps in copy mode) is not problematic, the easiest solution is to simply delete the worker directory and re-run ``buildslave create-slave``.
-
-If deleting the worker directory is problematic, the change to :file:`buildbot.tac` is simple.
-On line 3, replace::
-
-    from buildbot.slave.bot import BuildSlave
-
-with::
-
-    from buildslave.bot import BuildSlave
-
-After this change, the worker should start as usual.
-
-Upgrading from `0.8.1` to the latest ``0.8.*`` version of buildbot-slave
-''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
-
-If you have just installed a new version of Buildbot-slave, you may need to take some steps to upgrade it.
-If you are upgrading to version 0.8.2 or later, you can run
-
-.. code-block:: bash
-
-    buildslave upgrade-slave /path/to/worker/dir
-
-Upgrading from the latest version of ``buildbot-slave`` to ``buildbot-worker``
-''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
-
-If the loss of cached worker state (e.g., for Source steps in copy mode) is not problematic, the easiest solution is to simply delete the worker directory and re-run ``buildbot-worker create-worker``.
-
-If deleting the worker directory is problematic, you can change :file:`buildbot.tac` in the following way:
-
-1. Replace::
-
-       from buildslave.bot import BuildSlave
-
-   with::
-
-       from buildbot_worker.bot import Worker
-
-2. Replace::
-
-       application = service.Application('buildslave')
-
-   with::
-
-       application = service.Application('buildbot-worker')
-
-3. Replace::
-
-       s = BuildSlave(buildmaster_host, port, slavename, passwd, basedir,
-                      keepalive, usepty, umask=umask, maxdelay=maxdelay,
-                      numcpus=numcpus, allow_shutdown=allow_shutdown)
-
-   with::
-
-       s = Worker(buildmaster_host, port, slavename, passwd, basedir,
-                  keepalive, umask=umask, maxdelay=maxdelay,
-                  numcpus=numcpus, allow_shutdown=allow_shutdown)
-
-See :ref:`Transition to "Worker" Terminology <Worker-Transition-Buildbot-Worker>` for details of changes in version Buildbot ``0.9.0``.

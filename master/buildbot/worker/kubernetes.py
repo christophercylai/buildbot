@@ -13,10 +13,6 @@
 #
 # Copyright Buildbot Team Members
 
-from __future__ import absolute_import
-from __future__ import division
-from __future__ import print_function
-
 from twisted.internet import defer
 
 from buildbot.interfaces import LatentWorkerFailedToSubstantiate
@@ -65,7 +61,8 @@ class KubeLatentWorker(DockerBaseWorker, CompatibleLatentWorkerMixin):
 
     def getServicesContainers(self, build):
         # customization point to create services containers around the build container
-        # those containers will run within the same localhost as the build container (aka within the same pod)
+        # those containers will run within the same localhost as the build container (aka within
+        # the same pod)
         return []
 
     def renderWorkerProps(self, build_props):

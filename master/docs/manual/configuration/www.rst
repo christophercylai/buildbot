@@ -12,6 +12,7 @@ This server is configured with the ``www`` configuration key, which specifies a 
 
 ``port``
     The TCP port on which to serve requests.
+    It might be an integer or any string accepted by `serverFromString <https://twistedmatrix.com/documents/current/api/twisted.internet.endpoints.html#serverFromString>`_ (ex: "tcp:8010:interface=127.0.0.1" to listen on another interface).
     Note that SSL is not supported.
     To host Buildbot with SSL, use an HTTP proxy such as lighttpd, nginx, or Apache.
     If this is ``None``, the default, then the master will not implement a web server.
@@ -28,11 +29,20 @@ This server is configured with the ``www`` configuration key, which specifies a 
     This key gives a dictionary of additional UI plugins to load, along with configuration for those plugins.
     These plugins must be separately installed in the Python environment, e.g., ``pip install buildbot-waterfall-view``.
     See :ref:`UI-Plugins`
-    For example::
+    For example:
+
+    .. code-block:: python
 
         c['www'] = {
             'plugins': {'waterfall_view': True}
         }
+
+``default_page``
+    Configure the default landing page of the web server, for example to forward directly to another plugin, for example:
+
+    .. code-block:: python
+
+        c['www']['default_page'] = 'console'
 
 ``debug``
     If true, then debugging information will be output to the browser.
@@ -51,10 +61,20 @@ This server is configured with the ``www`` configuration key, which specifies a 
 
 ``avatar_methods``
     List of methods that can be used to get avatar pictures to use for the web server.
-    By default, buildbot uses Gravatar to get images associated with each users, if you want to disable this you can just specify empty list::
+    By default, buildbot uses Gravatar to get images associated with each users, if you want to disable this you can just specify empty list:
+
+    .. code-block:: python
 
         c['www'] = {
             'avatar_methods': []
+        }
+
+    You could also use the GitHub user avatar if GitHub authentication is enabled:
+
+    .. code-block:: python
+
+        c['www'] = {
+            'avatar_methods': [util.AvatarGitHub()]
         }
 
     For use of corporate pictures, you can use LdapUserInfo, which can also acts as an avatar provider.
@@ -77,7 +97,9 @@ This server is configured with the ``www`` configuration key, which specifies a 
     Custom component versions that you'd like to display on the About page.
     Buildbot will automatically prepend the versions of Python, twisted and buildbot itself to the list.
 
-    ``versions`` should be a list of tuples. for example::
+    ``versions`` should be a list of tuples. for example:
+
+    .. code-block:: python
 
         c['www'] = {
             # ...
@@ -91,26 +113,33 @@ This server is configured with the ``www`` configuration key, which specifies a 
 
 ``custom_templates_dir``
     This directory will be parsed for custom angularJS templates to replace the one of the original website templates.
+    You can use this to slightly customize buildbot look for your project, but to add any logic, you will need to create a full-blown plugin.
     if the directory string is relative, it will be joined to the master's basedir.
-    Either ``*.jade`` files or ``*.html`` files can be used, and will be used to override ``views/<filename>.html`` templates in the angularjs templateCache.
-    Unlike with the regular nodejs based angularjs build system, Python only jade interpreter is used to parse the jade templates.
-    ``pip install pyjade`` is be required to use jade templates.
-    You can also override plugin's directives, but they have to be in another directory.
+    Buildbot uses the jade file format natively (which has been renamed to 'pug' in the nodejs ecosystem), but you can also use html format if you prefer.
+
+    Either ``*.jade`` files or ``*.html`` files can be used, and will be used to override templates with the same name in the UI.
+    On the regular nodejs UI build system, we use nodejs's pug module to compile jade into html.
+    For custom_templates, we use the pypugjs interpreter to parse the jade templates, before sending them to the UI.
+    ``pip install pypugjs`` is be required to use jade templates.
+    You can also override plugin's directives, but they have to be in another directory, corresponding to the plugin's name in its ``package.json``.
+    For example:
 
     .. code-block:: none
 
         # replace the template whose source is in:
         # www/base/src/app/builders/build/build.tpl.jade
-        build.jade
+        build.jade  # here we use a jade (aka pug) file
 
         # replace the template whose source is in
-        # www/console_view/src/module/view/builders-header/buildersheader.tpl.jade
-        console_view/buildersheader.html
+        # www/console_view/src/module/view/builders-header/console.tpl.jade
+        console_view/console.html  # here we use html format
 
-    Known differences between nodejs jade and pyjade:
+    Known differences between nodejs's pug and pyjade:
 
         * quotes in attributes are not quoted. https://github.com/syrusakbary/pyjade/issues/132
           This means you should use double quotes for attributes e.g: ``tr(ng-repeat="br in buildrequests | orderBy:'-submitted_at'")``
+
+        * pypugjs may have some differences but it is a maintained fork of pyjade. https://github.com/kakulukia/pypugjs
 
 ``change_hook_dialects``
     See :ref:`Change-Hooks`.
@@ -266,9 +295,13 @@ The default templates are very much configurable via the following options.
 .. code-block:: python
 
     {
+        "left_pad"  : 5,
         "left_text": "Build Status",  # text on the left part of the image
         "left_color": "#555",  # color of the left part of the image
-        "style": "flat",  # style of the template availables are "flat", "flat-square", "plastic"
+        "right_pad" : 5,
+        "border_radius" : 5, # Border Radius on flat and plastic badges
+        # style of the template availables are "flat", "flat-square", "plastic"
+        "style": "plastic",
         "template_name": "{style}.svg.j2",  # name of the template
         "font_face": "DejaVu Sans",
         "font_size": 11,
@@ -295,6 +328,33 @@ Those options can be configured either using the plugin configuration:
 Or via the URL arguments like ``http://<buildbotURL>/badges/<buildername>.svg?left_color=222``.
 Custom templates can also be specified in a ``template`` directory nearby the ``master.cfg``.
 
+The badgeio template
+^^^^^^^^^^^^^^^^^^^^
+
+A badges template was developed to standardize upon a consistent "look and feel" across the usage of
+multiple CI/CD solutions; eg: use of Buildbot, Codecov.io, and Travis-CI. An example is shown below.
+
+.. image:: ../_images/badges-badgeio.png
+
+To ensure the correct "look and feel", the following Buildbot configuration is needed:
+
+.. code-block:: python
+
+    c['www'] = {
+        'plugins': {
+            'badges': {
+                "left_pad": 0,
+                "right_pad": 0,
+                "border_radius": 3,
+                "style": "badgeio"
+            }
+        }
+    }
+
+.. note::
+
+    It is highly recommended to use only with SVG.
+
 .. _CAIRO: https://www.cairographics.org/
 
 .. _Web-Authentication:
@@ -309,9 +369,12 @@ To secure Buildbot, you will need to configure an authentication plugin.
 
    To secure the Buildbot web interface, authorization rules must be provided via the 'authz' configuration.
    If you simply wish to lock down a Buildbot instance so that only read only access is permitted, you can
-   restrict access to control endpoints to an unpopulated 'admin' role. For example::
+   restrict access to control endpoints to an unpopulated 'admin' role. For example:
 
-      c['www']['authz'] = util.Authz(allowRules=[util.AnyControlEndpointMatcher(role="admins")],roleMatchers=[])
+   .. code-block:: python
+
+      c['www']['authz'] = util.Authz(allowRules=[util.AnyControlEndpointMatcher(role="admins")],
+                                     roleMatchers=[])
 
 .. note::
 
@@ -336,7 +399,7 @@ The available classes are described here:
 
     Simple username/password authentication using a list of user/password tuples provided in the configuration file.
 
-    ::
+    .. code-block:: python
 
         from buildbot.plugins import util
         c['www'] = {
@@ -349,7 +412,8 @@ The available classes are described here:
     This authentication class means to be overridden with a custom ``check_credentials`` method that gets username and password
     as arguments and check if the user can login. You may use it e.g. to check the credentials against an external database or file.
 
-    ::
+    .. code-block:: python
+
         from buildbot.plugins import util
 
         class MyAuth(util.CustomAuth):
@@ -368,7 +432,7 @@ The available classes are described here:
 
     This class implements simple username/password authentication against a standard :file:`.htpasswd` file.
 
-    ::
+    .. code-block:: python
 
         from buildbot.plugins import util
         c['www'] = {
@@ -387,7 +451,9 @@ The available classes are described here:
 
     Register your Buildbot instance with the ``BUILDBOT_URL/auth/login`` url as the allowed redirect URI.
 
-    Example::
+    Example:
+
+    .. code-block:: python
 
         from buildbot.plugins import util
         c['www'] = {
@@ -410,7 +476,7 @@ The available classes are described here:
     :param serverURL: The server URL if this is a GitHub Enterprise server.
     :param apiVersion: The GitHub API version to use. One of ``3`` or ``4``
                        (V3/REST or V4/GraphQL). Default=3.
-    :param getTeamsMembership: When ``True`` fetch all team memberships for each or the
+    :param getTeamsMembership: When ``True`` fetch all team memberships for each of the
                                organizations the user belongs to. The teams will be included in the
                                user's groups as ``org-name/team-name``.
     :param debug: When ``True`` and using ``apiVersion=4`` show some additional log calls with the
@@ -425,7 +491,9 @@ The available classes are described here:
     When using group-based authorization, the user's groups are equal to the names of the GitHub organizations the user
     is a member of.
 
-    Example::
+    Example:
+
+    .. code-block:: python
 
         from buildbot.plugins import util
         c['www'] = {
@@ -433,12 +501,15 @@ The available classes are described here:
             'auth': util.GitHubAuth("clientid", "clientsecret"),
         }
 
-    Example for Enterprise GitHub::
+    Example for Enterprise GitHub:
+
+    .. code-block:: python
 
         from buildbot.plugins import util
         c['www'] = {
             # ...
-            'auth': util.GitHubAuth("clientid", "clientsecret", "https://git.corp.mycompany.com"),
+            'auth': util.GitHubAuth("clientid", "clientsecret",
+                                    "https://git.corp.mycompany.com"),
         }
 
     An example on fetching team membership could be:
@@ -448,7 +519,8 @@ The available classes are described here:
         from buildbot.plugins import util
         c['www'] = {
             # ...
-            'auth': util.GitHubAuth("clientid", "clientsecret", apiVersion=4, getTeamsMembership=True),
+            'auth': util.GitHubAuth("clientid", "clientsecret", apiVersion=4,
+                                    getTeamsMembership=True),
             'authz': util.Authz(
                 allowRules=[
                   util.AnyControlEndpointMatcher(role="core-developers"),
@@ -463,7 +535,8 @@ The available classes are described here:
   with the above example, any user belonging to those teams would be granted the roles matching those
   team names.
 
-.. _GitHub: http://developer.github.com/v3/oauth_authorizations/
+.. _GitHub: https://developer.github.com/apps/building-oauth-apps/authorizing-oauth-apps/#web-application-flow
+
 
 .. py:class:: buildbot.www.oauth2.GitLabAuth(instanceUri, clientId, clientSecret)
 
@@ -476,7 +549,9 @@ The available classes are described here:
 
     Register your Buildbot instance with the ``BUILDBOT_URL/auth/login`` url as the allowed redirect URI.
 
-    Example::
+    Example:
+
+    .. code-block:: python
 
         from buildbot.plugins import util
         c['www'] = {
@@ -496,7 +571,9 @@ The available classes are described here:
 
     Register your Buildbot instance with the ``BUILDBOT_URL/auth/login`` url as the allowed redirect URI.
 
-    Example::
+    Example:
+
+    .. code-block:: python
 
         from buildbot.plugins import util
         c['www'] = {
@@ -519,7 +596,9 @@ The available classes are described here:
     Usually this means that Buildbot should listen for incoming connections only on localhost (or on some firewall-protected port).
     The reverse proxy must require HTTP authentication to access Buildbot pages (using any source for credentials, such as htpasswd, PAM, LDAP, Kerberos).
 
-    Example::
+    Example:
+
+    .. code-block:: python
 
         from buildbot.plugins import util
         c['www'] = {
@@ -597,7 +676,9 @@ Currently only one provider is available:
 
         If one of the three optional groups parameters is supplied, then all of them become mandatory. If none is supplied, the retrieved user info has an empty list of groups.
 
-Example::
+Example:
+
+.. code-block:: python
 
             from buildbot.plugins import util
 
@@ -631,7 +712,9 @@ Example::
 
                 pip install ldap3
 
-In the case of oauth2 authentications, you have to pass the userInfoProvider as keyword argument::
+In the case of oauth2 authentications, you have to pass the userInfoProvider as keyword argument:
+
+.. code-block:: python
 
                 from buildbot.plugins import util
                 userInfoProvider = util.LdapUserInfo(...)
@@ -789,6 +872,20 @@ It allows or denies access to the REST APIs according to rules.
 
 - Role matchers associate authenticated users to roles.
 
+Restricting Read Access
++++++++++++++++++++++++
+
+Please note that you can use this framework to deny read access to the REST API, but there is no access control in websocket or SSE APIs.
+Practically this means user will still see live updates from running builds in the UI, as those will come from websocket.
+
+The only resources that are only available for read in REST API are the log data (a.k.a `logchunks`).
+
+From a strict security point of view you cannot really use Buildbot Authz framework to securely deny read access to your bot.
+The access control is rather designed to restrict control APIs which are only accessible through REST API.
+In order to reduce attack surface, we recommend to place Buildbot behind an access controlled reverse proxy like OAuth2Proxy_.
+
+.. _OAuth2Proxy: https://github.com/oauth2-proxy/oauth2-proxy
+
 Authz Configuration
 +++++++++++++++++++
 
@@ -844,7 +941,7 @@ In this case, you can look at the source code for detailed examples on how to wr
     :param role: The role which grants access to any control endpoint.
 
     AnyControlEndpointMatcher grants control rights to people with given role (usually "admins")
-    This endpoint matcher is matches current and future control endpoints.
+    This endpoint matcher matches current and future control endpoints.
     You need to add this in the end of your configuration to make sure it is future proof.
 
 .. py:class:: buildbot.www.authz.endpointmatchers.ForceBuildEndpointMatcher(builder, role)
@@ -877,7 +974,7 @@ In this case, you can look at the source code for detailed examples on how to wr
 
 Role matchers
 +++++++++++++
-Endpoint matchers are responsible for creating rules to match people and grant them roles.
+Role matchers are responsible for creating rules to match people and grant them roles.
 You can grant roles from groups information provided by the Auth plugins, or if you prefer directly to people's email.
 
 
@@ -888,7 +985,9 @@ You can grant roles from groups information provided by the Auth plugins, or if 
     RolesFromGroups grants roles from the groups of the user.
     If a user has group ``buildbot-admin``, and groupPrefix is ``buildbot-``, then user will be granted the role 'admin'
 
-    ex::
+    ex:
+
+    .. code-block:: python
 
         roleMatchers=[
           util.RolesFromGroups(groupPrefix="buildbot-")
@@ -900,7 +999,9 @@ You can grant roles from groups information provided by the Auth plugins, or if 
 
     RolesFromEmails grants roles to users according to the hardcoded emails.
 
-    ex::
+    ex:
+
+    .. code-block:: python
 
         roleMatchers=[
           util.RolesFromEmails(admins=["my@email.com"])
@@ -913,7 +1014,9 @@ You can grant roles from groups information provided by the Auth plugins, or if 
     RolesFromDomain grants roles to users according to their email domains.
     If a user tried to login with email ``foo@gmail.com``, then user will be granted the role 'admins'.
 
-    ex::
+    ex:
+
+    .. code-block:: python
 
         roleMatchers=[
           util.RolesFromDomain(admins=["gmail.com"])
@@ -925,7 +1028,9 @@ You can grant roles from groups information provided by the Auth plugins, or if 
 
     RolesFromOwner grants a given role when property owner matches the email of the user
 
-    ex::
+    ex:
+
+    .. code-block:: python
 
         roleMatchers=[
             RolesFromOwner(role="owner")
@@ -938,7 +1043,9 @@ You can grant roles from groups information provided by the Auth plugins, or if 
 
     RolesFromUsername grants the given roles when the ``username`` property is within the list of usernames.
 
-    ex::
+    ex:
+
+    .. code-block:: python
 
         roleMatchers=[
             RolesFromUsername(roles=["admins"], usernames=["root"]),

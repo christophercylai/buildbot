@@ -39,6 +39,7 @@ class Db2DataMixin:
             return (props
                     if '*' in filters
                     else dict(((k, v) for k, v in props.items() if k in filters)))
+        return None
 
     def db2data(self, dbdict):
         data = {
@@ -86,7 +87,7 @@ class BuildEndpoint(Db2DataMixin, base.BuildNestingMixin, base.Endpoint):
         else:
             bldr = yield self.getBuilderId(kwargs)
             if bldr is None:
-                return
+                return None
             num = kwargs['number']
             dbdict = yield self.master.db.builds.getBuildByNumber(bldr, num)
 
@@ -137,30 +138,37 @@ class BuildsEndpoint(Db2DataMixin, base.BuildNestingMixin, base.Endpoint):
         /builders/n:builderid/builds
         /builders/i:buildername/builds
         /buildrequests/n:buildrequestid/builds
+        /changes/n:changeid/builds
         /workers/n:workerid/builds
     """
     rootLinkName = 'builds'
 
     @defer.inlineCallbacks
     def get(self, resultSpec, kwargs):
-        # following returns None if no filter
-        # true or false, if there is a complete filter
-        builderid = None
-        if 'builderid' in kwargs or 'buildername' in kwargs:
-            builderid = yield self.getBuilderId(kwargs)
-            if builderid is None:
-                return []
-        complete = resultSpec.popBooleanFilter("complete")
-        buildrequestid = resultSpec.popIntegerFilter("buildrequestid")
-        resultSpec.fieldMapping = self.fieldMapping
-        builds = yield self.master.db.builds.getBuilds(
-            builderid=builderid,
-            buildrequestid=kwargs.get('buildrequestid', buildrequestid),
-            workerid=kwargs.get('workerid'),
-            complete=complete,
-            resultSpec=resultSpec)
+        changeid = kwargs.get('changeid')
+        if changeid is not None:
+            builds = yield self.master.db.builds.getBuildsForChange(changeid)
+        else:
+            # following returns None if no filter
+            # true or false, if there is a complete filter
+            builderid = None
+            if 'builderid' in kwargs or 'buildername' in kwargs:
+                builderid = yield self.getBuilderId(kwargs)
+                if builderid is None:
+                    return []
+            complete = resultSpec.popBooleanFilter("complete")
+            buildrequestid = resultSpec.popIntegerFilter("buildrequestid")
+            resultSpec.fieldMapping = self.fieldMapping
+            builds = yield self.master.db.builds.getBuilds(
+                builderid=builderid,
+                buildrequestid=kwargs.get('buildrequestid', buildrequestid),
+                workerid=kwargs.get('workerid'),
+                complete=complete,
+                resultSpec=resultSpec)
+
         # returns properties' list
         filters = resultSpec.popProperties()
+
         buildscol = []
         for b in builds:
             data = yield self.db2data(b)
@@ -171,6 +179,7 @@ class BuildsEndpoint(Db2DataMixin, base.BuildNestingMixin, base.Endpoint):
                     props, filters)
                 if filtered_properties:
                     data['properties'] = filtered_properties
+
             buildscol.append(data)
         return buildscol
 

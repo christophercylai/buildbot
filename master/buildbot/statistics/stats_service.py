@@ -26,6 +26,10 @@ class StatsService(service.BuildbotService):
     A middleware for passing on statistics data to all storage backends.
     """
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.consumers = []
+
     def checkConfig(self, storage_backends):
         for wfb in storage_backends:
             if not isinstance(wfb, StatsStorageBase):
@@ -33,6 +37,7 @@ class StatsService(service.BuildbotService):
                                 "Should be of type StatsStorageBase, "
                                 "is: {0!r}".format(type(StatsStorageBase)))
 
+    @defer.inlineCallbacks
     def reconfigService(self, storage_backends):
         log.msg(
             "Reconfiguring StatsService with config: {0!r}".format(storage_backends))
@@ -43,12 +48,11 @@ class StatsService(service.BuildbotService):
         for svc in storage_backends:
             self.registeredStorageServices.append(svc)
 
-        self.consumers = []
-        self.registerConsumers()
+        yield self.removeConsumers()
+        yield self.registerConsumers()
 
     @defer.inlineCallbacks
     def registerConsumers(self):
-        self.removeConsumers()  # remove existing consumers and add new ones
         self.consumers = []
 
         for svc in self.registeredStorageServices:
@@ -61,7 +65,7 @@ class StatsService(service.BuildbotService):
     @defer.inlineCallbacks
     def stopService(self):
         yield super().stopService()
-        self.removeConsumers()
+        yield self.removeConsumers()
 
     @defer.inlineCallbacks
     def removeConsumers(self):

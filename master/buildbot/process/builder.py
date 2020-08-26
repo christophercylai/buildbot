@@ -78,6 +78,9 @@ class Builder(util_service.ReconfigurableServiceMixin,
         self.config = None
         self.builder_status = None
 
+        # Tracks config version for locks
+        self.config_version = None
+
     @defer.inlineCallbacks
     def reconfigServiceWithBuildbotConfig(self, new_config):
         # find this builder in the config
@@ -85,7 +88,7 @@ class Builder(util_service.ReconfigurableServiceMixin,
             if builder_config.name == self.name:
                 found_config = True
                 break
-        assert found_config, "no config found for builder '%s'" % self.name
+        assert found_config, "no config found for builder '{}'".format(self.name)
 
         # set up a builder status object on the first reconfig
         if not self.builder_status:
@@ -96,6 +99,7 @@ class Builder(util_service.ReconfigurableServiceMixin,
                 description=builder_config.description)
 
         self.config = builder_config
+        self.config_version = self.master.config_version
 
         # allocate  builderid now, so that the builder is visible in the web
         # UI; without this, the builder wouldn't appear until it preformed a
@@ -154,6 +158,7 @@ class Builder(util_service.ReconfigurableServiceMixin,
             order=['submitted_at'], limit=1)
         if unclaimed:
             return unclaimed[0]['submitted_at']
+        return None
 
     @defer.inlineCallbacks
     def getNewestCompleteTime(self):
@@ -218,7 +223,7 @@ class Builder(util_service.ReconfigurableServiceMixin,
                 #
                 # Therefore, when we see that we're already attached, we can
                 # just ignore it.
-                return defer.succeed(self)
+                return self
 
         wfb = workerforbuilder.WorkerForBuilder()
         wfb.setBuilder(self)
@@ -243,11 +248,10 @@ class Builder(util_service.ReconfigurableServiceMixin,
             if wfb.worker == worker:
                 break
         else:
-            log.msg("WEIRD: Builder.detached(%s) (%s)"
-                    " not in attaching_workers(%s)"
-                    " or workers(%s)" % (worker, worker.workername,
-                                         self.attaching_workers,
-                                         self.workers))
+            log.msg(("WEIRD: Builder.detached({}) ({})"
+                     " not in attaching_workers({})"
+                     " or workers({})").format(worker, worker.workername, self.attaching_workers,
+                                               self.workers))
             return
 
         if wfb in self.attaching_workers:
@@ -274,7 +278,7 @@ class Builder(util_service.ReconfigurableServiceMixin,
         # don't unnecessarily setup properties for build
         def setupPropsIfNeeded(props):
             if props is not None:
-                return
+                return None
             props = Properties()
             Build.setupPropertiesKnownBeforeBuildStarts(props, [buildrequest],
                                                         self, workerforbuilder)
@@ -295,8 +299,8 @@ class Builder(util_service.ReconfigurableServiceMixin,
             props = setupPropsIfNeeded(props)
             locks = yield props.render(locks)
 
-        locks = [(self.botmaster.getLockFromLockAccess(access), access)
-                 for access in locks]
+        locks = yield self.botmaster.getLockFromLockAccesses(locks, self.config_version)
+
         if locks:
             can_start = Build._canAcquireLocks(locks, workerforbuilder)
             if can_start is False:
@@ -320,8 +324,7 @@ class Builder(util_service.ReconfigurableServiceMixin,
         Build.setupPropertiesKnownBeforeBuildStarts(
             props, build.requests, build.builder, workerforbuilder)
 
-        log.msg("starting build %s using worker %s" %
-                (build, workerforbuilder))
+        log.msg("starting build {} using worker {}".format(build, workerforbuilder))
 
         # set up locks
         locks = yield build.render(self.config.locks)

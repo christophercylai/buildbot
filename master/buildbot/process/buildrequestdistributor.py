@@ -21,7 +21,6 @@ from datetime import datetime
 from dateutil.tz import tzutc
 
 from twisted.internet import defer
-from twisted.internet import reactor
 from twisted.python import log
 from twisted.python.failure import Failure
 
@@ -227,7 +226,7 @@ class BasicBuildChooser(BuildChooserBase):
                     nextBreq = None
             except Exception:
                 log.err(Failure(),
-                        "from _getNextUnclaimedBuildRequest for builder '%s'" % (self.bldr,))
+                        "from _getNextUnclaimedBuildRequest for builder '{}'".format(self.bldr))
                 nextBreq = None
         else:
             # otherwise just return the first build
@@ -248,7 +247,7 @@ class BasicBuildChooser(BuildChooserBase):
                 worker = yield self.nextWorker(self.bldr, self.workerpool, buildrequest)
             except Exception:
                 log.err(Failure(),
-                        "from nextWorker for builder '%s'" % (self.bldr,))
+                        "from nextWorker for builder '{}'".format(self.bldr))
                 worker = None
 
             if not worker or worker not in self.workerpool:
@@ -365,10 +364,11 @@ class BuildRequestDistributor(service.AsyncMultiService):
                     self._activity_loop_deferred = self._activityLoop()
             except Exception:  # pragma: no cover
                 log.err(Failure(),
-                        "while attempting to start builds on %s" % self.name)
+                        "while attempting to start builds on {}".format(self.name))
 
         yield self.pending_builders_lock.run(
             resetPendingBuildersList, new_builders)
+        return None
 
     @defer.inlineCallbacks
     def _defaultSorter(self, master, builders):
@@ -432,7 +432,7 @@ class BuildRequestDistributor(service.AsyncMultiService):
 
         # run it
         try:
-            builders = yield defer.maybeDeferred(sorter, self.master, builders)
+            builders = yield sorter(self.master, builders)
         except Exception:
             log.err(Failure(), "prioritizing builders; order unspecified")
 
@@ -477,8 +477,7 @@ class BuildRequestDistributor(service.AsyncMultiService):
                 if bldr:
                     yield self._maybeStartBuildsOnBuilder(bldr)
             except Exception:
-                log.err(Failure(),
-                        "from maybeStartBuild for builder '%s'" % (bldr_name,))
+                log.err(Failure(), "from maybeStartBuild for builder '{}'".format(bldr_name))
 
             self.activity_lock.release()
 
@@ -487,7 +486,7 @@ class BuildRequestDistributor(service.AsyncMultiService):
         self.active = False
 
     @defer.inlineCallbacks
-    def _maybeStartBuildsOnBuilder(self, bldr, _reactor=reactor):
+    def _maybeStartBuildsOnBuilder(self, bldr):
         # create a chooser to give us our next builds
         # this object is temporary and will go away when we're done
         bc = self.createBuildChooser(bldr, self.master)
@@ -499,7 +498,7 @@ class BuildRequestDistributor(service.AsyncMultiService):
 
             # claim brid's
             brids = [br.id for br in breqs]
-            claimed_at_epoch = _reactor.seconds()
+            claimed_at_epoch = self.master.reactor.seconds()
             claimed_at = epoch2datetime(claimed_at_epoch)
             if not (yield self.master.data.updates.claimBuildRequests(
                     brids, claimed_at=claimed_at)):

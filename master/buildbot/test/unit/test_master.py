@@ -30,8 +30,8 @@ from buildbot import master
 from buildbot import monkeypatches
 from buildbot.db import exceptions
 from buildbot.interfaces import IConfigLoader
+from buildbot.test import fakedb
 from buildbot.test.fake import fakedata
-from buildbot.test.fake import fakedb
 from buildbot.test.fake import fakemq
 from buildbot.test.fake.botmaster import FakeBotMaster
 from buildbot.test.util import dirs
@@ -66,7 +66,8 @@ class InitTests(unittest.SynchronousTestCase):
 
     def test_configfile_default(self):
         """
-        If neither configfile nor config_loader are specified, The default config_loader is a `FileLoader` pointing at `"master.cfg"`.
+        If neither configfile nor config_loader are specified, The default config_loader is a
+        `FileLoader` pointing at `"master.cfg"`.
         """
         m = master.BuildMaster(".", reactor=reactor)
         self.assertEqual(m.config_loader, config.FileLoader(".", "master.cfg"))
@@ -98,12 +99,12 @@ class StartupAndReconfig(dirs.DirsMixin, logging.LoggingMixin,
         self.master.sendBuildbotNetUsageData = mock.Mock()
         self.master.botmaster = FakeBotMaster()
         self.db = self.master.db = fakedb.FakeDBConnector(self)
-        self.db.setServiceParent(self.master)
+        yield self.db.setServiceParent(self.master)
         self.mq = self.master.mq = fakemq.FakeMQConnector(self)
-        self.mq.setServiceParent(self.master)
+        yield self.mq.setServiceParent(self.master)
         self.data = self.master.data = fakedata.FakeDataConnector(
             self.master, self)
-        self.data.setServiceParent(self.master)
+        yield self.data.setServiceParent(self.master)
 
     def tearDown(self):
         return self.tearDownDirs()

@@ -19,6 +19,7 @@
 # Also don't forget to mirror your changes on command-line options in manual
 # pages and reStructuredText documentation.
 
+import getpass
 import sys
 import textwrap
 
@@ -163,8 +164,7 @@ class CreateMasterOptions(base.BasedirMixin, base.SubcommandOptions):
             # check if sqlalchemy will be able to parse specified URL
             sa.engine.url.make_url(self['db'])
         except sa.exc.ArgumentError:
-            raise usage.UsageError("could not parse database URL '%s'"
-                                   % self['db'])
+            raise usage.UsageError("could not parse database URL '{}'".format(self['db']))
 
 
 class StopOptions(base.BasedirMixin, base.SubcommandOptions):
@@ -287,8 +287,7 @@ class SendChangeOptions(base.SubcommandOptions):
             try:
                 self['when'] = float(self['when'])
             except (TypeError, ValueError):
-                raise usage.UsageError('invalid "when" value %s'
-                                       % (self['when'],))
+                raise usage.UsageError('invalid "when" value {}'.format(self['when']))
         else:
             self['when'] = None
 
@@ -304,14 +303,13 @@ class SendChangeOptions(base.SubcommandOptions):
         # fix up the auth with a password if none was given
         auth = self.get('auth')
         if ':' not in auth:
-            import getpass
-            pw = getpass.getpass("Enter password for '%s': " % auth)
-            auth = "%s:%s" % (auth, pw)
+            pw = getpass.getpass("Enter password for '{}': ".format(auth))
+            auth = "{}:{}".format(auth, pw)
         self['auth'] = tuple(auth.split(':', 1))
 
         vcs = ['cvs', 'svn', 'darcs', 'hg', 'bzr', 'git', 'mtn', 'p4']
         if self.get('vc') and self.get('vc') not in vcs:
-            raise usage.UsageError("vc must be one of %s" % (', '.join(vcs)))
+            raise usage.UsageError("vc must be one of {}".format(', '.join(vcs)))
 
         validateMasterOption(self.get('master'))
 
@@ -584,9 +582,8 @@ class UserOptions(base.SubcommandOptions):
         for user in info:
             for attr_type in user:
                 if attr_type not in valid:
-                    raise usage.UsageError(
-                        "Type not a valid attr_type, must be in: %s"
-                        % ', '.join(valid))
+                    raise usage.UsageError("Type not a valid attr_type, must be in: {}".format(
+                            ', '.join(valid)))
 
     def postOptions(self):
         super().postOptions()
@@ -654,15 +651,26 @@ class DataSpecOption(base.BasedirMixin, base.SubcommandOptions):
         return "Usage:   buildbot dataspec [options]"
 
 
-class ProcessWWWIndexOption(base.BasedirMixin, base.SubcommandOptions):
+class DevProxyOptions(base.BasedirMixin, base.SubcommandOptions):
 
-    """This command is used with the front end's proxy task. It enables to run the front end
-    without the backend server running in the background"""
+    """Run a fake web server serving the local ui frontend and a distant rest and websocket api.
+    This command required aiohttp to be installed in the virtualenv"""
 
-    subcommandFunction = "buildbot.scripts.processwwwindex.processwwwindex"
+    subcommandFunction = "buildbot.scripts.devproxy.devproxy"
+    optFlags = [
+        ["unsafe_ssl", None, "Bypass ssl certificate validation"],
+    ]
     optParameters = [
-        ['index-file', 'i', None,
-            "Path to the index.html file to be processed"],
+        ["port", "p", 8011,
+         "http port to use"],
+        ["plugins", None, None,
+         "plugin config to use. As json string e.g: "
+         "--plugins='{\"custom_plugin\": {\"option1\": true}}'"],
+        ["auth_cookie", None, None,
+         "TWISTED_SESSION cookie to be used for auth "
+         "(taken in developer console: in document.cookie variable)"],
+        ["buildbot_url", "b", "https://buildbot.buildbot.net",
+         "real buildbot url to proxy to (can be http or https)"]
     ]
 
 
@@ -726,9 +734,8 @@ class Options(usage.Options):
          "Manage users in buildbot's database"],
         ['dataspec', None, DataSpecOption,
          "Output data api spec"],
-        ['processwwwindex', None, ProcessWWWIndexOption,
-         "Process the index.html to enable the front end package working without backend. "
-         "This is a command to work with the frontend's proxy task."
+        ['dev-proxy', None, DevProxyOptions,
+         "Run a fake web server serving the local ui frontend and a distant rest and websocket api."
          ],
         ['cleanupdb', None, CleanupDBOptions,
          "cleanup the database"
@@ -736,7 +743,7 @@ class Options(usage.Options):
     ]
 
     def opt_version(self):
-        print("Buildbot version: %s" % buildbot.version)
+        print("Buildbot version: {}".format(buildbot.version))
         super().opt_version()
 
     def opt_verbose(self):
@@ -754,7 +761,7 @@ def run():
     try:
         config.parseOptions(sys.argv[1:])
     except usage.error as e:
-        print("%s:  %s" % (sys.argv[0], e))
+        print("{}:  {}".format(sys.argv[0], e))
         print()
 
         c = getattr(config, 'subOptions', config)

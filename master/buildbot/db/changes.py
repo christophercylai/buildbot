@@ -53,7 +53,7 @@ class ChangesConnectorComponent(base.DBConnectorComponent):
         return self.db.pool.do(thd)
 
     @defer.inlineCallbacks
-    def addChange(self, author=None, files=None, comments=None, is_dir=None,
+    def addChange(self, author=None, committer=None, files=None, comments=None, is_dir=None,
                   revision=None, when_timestamp=None, branch=None,
                   category=None, revlink='', properties=None, repository='', codebase='',
                   project='', uid=None):
@@ -77,6 +77,7 @@ class ChangesConnectorComponent(base.DBConnectorComponent):
         ch_tbl = self.db.model.changes
 
         self.checkLength(ch_tbl.c.author, author)
+        self.checkLength(ch_tbl.c.committer, committer)
         self.checkLength(ch_tbl.c.branch, branch)
         self.checkLength(ch_tbl.c.revision, revision)
         self.checkLength(ch_tbl.c.revlink, revlink)
@@ -105,6 +106,7 @@ class ChangesConnectorComponent(base.DBConnectorComponent):
 
             r = conn.execute(ch_tbl.insert(), dict(
                 author=author,
+                committer=committer,
                 comments=comments,
                 branch=branch,
                 revision=revision,
@@ -179,10 +181,8 @@ class ChangesConnectorComponent(base.DBConnectorComponent):
             fromChanges[ss['codebase']] = yield self.getChangeFromSSid(ss['ssid'])
 
         # Get the last successful build on the same builder
-        previousBuild = yield self.master.db.builds.getPrevSuccessfulBuild(currentBuild['builderid'],
-                                                                           currentBuild[
-                                                                               'number'],
-                                                                           ssBuild)
+        previousBuild = yield self.master.db.builds.getPrevSuccessfulBuild(
+                currentBuild['builderid'], currentBuild['number'], ssBuild)
         if previousBuild:
             for ss in (yield gssfb(previousBuild['id'])):
                 toChanges[ss['codebase']] = yield self.getChangeFromSSid(ss['ssid'])
@@ -242,33 +242,20 @@ class ChangesConnectorComponent(base.DBConnectorComponent):
             return row_uids
         return self.db.pool.do(thd)
 
-    def getRecentChanges(self, count):
-        def thd(conn):
-            # get the changeids from the 'changes' table
-            changes_tbl = self.db.model.changes
-            q = sa.select([changes_tbl.c.changeid],
-                          order_by=[sa.desc(changes_tbl.c.changeid)],
-                          limit=count)
-            rp = conn.execute(q)
-            changeids = [row.changeid for row in rp]
-            rp.close()
-            return list(reversed(changeids))
-        d = self.db.pool.do(thd)
+    def _getDataFromRow(self, row):
+        return row.changeid
 
-        # then turn those into changes, using the cache
-        @d.addCallback
-        def get_changes(changeids):
-            return defer.gatherResults([self.getChange(changeid)
-                                        for changeid in changeids])
-        return d
-
-    def getChanges(self):
+    def getChanges(self, resultSpec=None):
         def thd(conn):
             # get the changeids from the 'changes' table
             changes_tbl = self.db.model.changes
             q = sa.select([changes_tbl.c.changeid])
+
+            if resultSpec is not None:
+                return reversed(resultSpec.thd_execute(conn, q, self._getDataFromRow))
+
             rp = conn.execute(q)
-            changeids = [row.changeid for row in rp]
+            changeids = [self._getDataFromRow(row) for row in rp]
             rp.close()
             return list(changeids)
         d = self.db.pool.do(thd)
@@ -355,6 +342,7 @@ class ChangesConnectorComponent(base.DBConnectorComponent):
             changeid=ch_row.changeid,
             parent_changeids=parent_changeids,
             author=ch_row.author,
+            committer=ch_row.committer,
             files=[],  # see below
             comments=ch_row.comments,
             revision=ch_row.revision,

@@ -1,3 +1,4 @@
+# pylint: disable=import-outside-toplevel
 # Runs the build-bot as a Windows service.
 # To use:
 # * Install and configure buildbot as per normal (ie, running
@@ -111,7 +112,7 @@ class BBService(win32serviceutil.ServiceFramework):
     _svc_name_ = 'BuildBot'
     _svc_display_name_ = _svc_name_
     _svc_description_ = 'Manages local buildbot workers and masters - ' \
-                        'see http://buildbot.sourceforge.net'
+                        'see https://buildbot.net'
 
     def __init__(self, args):
         win32serviceutil.ServiceFramework.__init__(self, args)
@@ -232,11 +233,11 @@ class BBService(win32serviceutil.ServiceFramework):
 
         for bbdir in self.dirs:
             self.info("Starting BuildBot in directory '{0}'".format(bbdir))
-            hstop = self.hWaitStop
+            # hWaitStop is the Handle and the command needs the int associated
+            # to that Handle
+            hstop = int(self.hWaitStop)
+            cmd = '{} --spawn {} start --nodaemon {}'.format(self.runner_prefix, hstop, bbdir)
 
-            cmd = '{0} --spawn {1} start --nodaemon {2}'.format(
-                self.runner_prefix, int(hstop), bbdir)
-            # print "cmd is", cmd
             h, t, output = self.createProcess(cmd)
             child_infos.append((bbdir, h, t, output))
 
@@ -249,27 +250,26 @@ class BBService(win32serviceutil.ServiceFramework):
             if rc == win32event.WAIT_OBJECT_0:
                 # user sent a stop service request
                 break
-            else:
-                # A child process died.  For now, just log the output
-                # and forget the process.
-                index = rc - win32event.WAIT_OBJECT_0 - 1
-                bbdir, dead_handle, dead_thread, output_blocks = \
-                    child_infos[index]
-                status = win32process.GetExitCodeProcess(dead_handle)
-                output = "".join(output_blocks)
-                if not output:
-                    output = "The child process generated no output. " \
-                             "Please check the twistd.log file in the " \
-                             "indicated directory."
+            # A child process died.  For now, just log the output
+            # and forget the process.
+            index = rc - win32event.WAIT_OBJECT_0 - 1
+            bbdir, dead_handle, dead_thread, output_blocks = \
+                child_infos[index]
+            status = win32process.GetExitCodeProcess(dead_handle)
+            output = "".join(output_blocks)
+            if not output:
+                output = ("The child process generated no output. "
+                          "Please check the twistd.log file in the "
+                          "indicated directory.")
 
-                self.warning("BuildBot for directory {0!r} terminated with "
-                             "exit code {1}.\n{2}".format(bbdir, status, output))
+            self.warning("BuildBot for directory {0!r} terminated with "
+                         "exit code {1}.\n{2}".format(bbdir, status, output))
 
-                del child_infos[index]
+            del child_infos[index]
 
-                if not child_infos:
-                    self.warning("All BuildBot child processes have "
-                                 "terminated.  Service stopping.")
+            if not child_infos:
+                self.warning("All BuildBot child processes have "
+                             "terminated.  Service stopping.")
 
         # Either no child processes left, or stop event set.
         self.ReportServiceStatus(win32service.SERVICE_STOP_PENDING)
@@ -301,7 +301,7 @@ class BBService(win32serviceutil.ServiceFramework):
             for i in range(5):
                 t.join(1)
                 self.ReportServiceStatus(win32service.SERVICE_STOP_PENDING)
-                if not t.isAlive():
+                if not t.is_alive():
                     break
             else:
                 self.warning("Redirect thread did not stop!")
@@ -518,9 +518,11 @@ def ConfigureLogOnAsAServicePolicy(accountName):
             privileges = []
 
         if SE_SERVICE_LOGON_RIGHT in privileges:
-            print("Account {}({}) has granted {} privilege.".format(accountName, sid, SE_SERVICE_LOGON_RIGHT))
+            print("Account {}({}) has granted {} privilege.".format(accountName, sid,
+                                                                    SE_SERVICE_LOGON_RIGHT))
         else:
-            print("error: Account {}({}) does not have {} privilege.".format(accountName, sid, SE_SERVICE_LOGON_RIGHT))
+            print(("error: Account {}({}) does not have {} privilege."
+                   ).format(accountName, sid, SE_SERVICE_LOGON_RIGHT))
 
 
 # A custom install function.

@@ -187,6 +187,23 @@ class ILatentWorker(IWorker):
         """
 
 
+class IMachine(Interface):
+    pass
+
+
+class IMachineAction(Interface):
+    def perform(self, manager):
+        """ Perform an action on the machine managed by manager. Returns a
+            deferred evaluating to True if it was possible to execute the
+            action.
+        """
+
+
+class ILatentMachine(IMachine):
+    """ A machine that is not always running, but can be started when requested.
+    """
+
+
 class IRenderable(Interface):
 
     """An object that can be interpolated with properties from a build.
@@ -1055,8 +1072,8 @@ class IConfigurator(Interface):
         """
         Alter the buildbot config_dict, as defined in master.cfg
 
-        like the master.cfg, this is run out of the main reactor thread, so this can block, but this can't
-        call most Buildbot facilities.
+        like the master.cfg, this is run out of the main reactor thread, so this can block, but
+        this can't call most Buildbot facilities.
 
         :returns: None
         """

@@ -51,11 +51,16 @@ class LatentController(SeverWorkerConnectionMixin):
     stop_instance() is executed.
     """
 
-    def __init__(self, case, name, kind=None, build_wait_timeout=600, **kwargs):
+    def __init__(self, case, name, kind=None, build_wait_timeout=600,
+                 starts_without_substantiate=None, **kwargs):
         self.case = case
         self.build_wait_timeout = build_wait_timeout
         self.worker = ControllableLatentWorker(name, self, **kwargs)
         self.remote_worker = None
+
+        if starts_without_substantiate is not None:
+            self.worker.starts_without_substantiate = \
+                starts_without_substantiate
 
         self.state = States.STOPPED
         self.auto_stop_flag = False
@@ -132,7 +137,7 @@ class LatentController(SeverWorkerConnectionMixin):
     def disconnect_worker(self):
         super().disconnect_worker()
         if self.remote_worker is None:
-            return
+            return None
         self.worker.conn, conn = None, self.worker.conn
         self.remote_worker, worker = None, self.remote_worker
 
@@ -177,10 +182,9 @@ class ControllableLatentWorker(AbstractLatentWorker):
             **kwargs)
 
     def reconfigService(self, name, _, **kwargs):
-        AbstractLatentWorker.reconfigService(
-            self, name, None,
-            build_wait_timeout=self._controller.build_wait_timeout,
-            **kwargs)
+        return super().reconfigService(name, None,
+                                       build_wait_timeout=self._controller.build_wait_timeout,
+                                       **kwargs)
 
     @defer.inlineCallbacks
     def isCompatibleWithBuild(self, build_props):
@@ -205,13 +209,8 @@ class ControllableLatentWorker(AbstractLatentWorker):
         return self._controller._start_deferred
 
     @defer.inlineCallbacks
-    def stop_instance(self, build):
-        assert self._controller.state in [States.STARTED, States.STARTING]
-        # if we did not succeed starting, at least call back the failure result
-        if self._controller.state == States.STARTING:
-            self._controller.state = States.STOPPED
-            d, self._controller._start_deferred = self._controller._start_deferred, None
-            d.callback(False)
+    def stop_instance(self, fast):
+        assert self._controller.state == States.STARTED
         self._controller.state = States.STOPPING
 
         if self._controller.auto_stop_flag:

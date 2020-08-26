@@ -133,9 +133,8 @@ class GitHubPullrequestPoller(base.ReconfigurablePollingChangeSource,
             category)
 
     def describe(self):
-        return "GitHubPullrequestPoller watching the "\
-            "GitHub repository %s/%s" % (
-                self.owner, self.repo)
+        return ("GitHubPullrequestPoller watching the "
+                "GitHub repository {}/{}").format(self.owner, self.repo)
 
     @defer.inlineCallbacks
     def _getPullInformation(self, pull_number):
@@ -146,19 +145,13 @@ class GitHubPullrequestPoller(base.ReconfigurablePollingChangeSource,
 
     @defer.inlineCallbacks
     def _getPulls(self):
-        log.debug("GitHubPullrequestPoller: polling "
-                  "GitHub repository %s/%s, branches: %s" %
-                  (self.owner, self.repo, self.branches))
+        log.debug(("GitHubPullrequestPoller: polling "
+                   "GitHub repository {}/{}, branches: {}").format(self.owner, self.repo,
+                                                                   self.branches))
         result = yield self._http.get('/'.join(
             ['/repos', self.owner, self.repo, 'pulls']))
         my_json = yield result.json()
         return my_json
-
-    @defer.inlineCallbacks
-    def _getEmail(self, user):
-        result = yield self._http.get("/".join(['/users', user]))
-        my_json = yield result.json()
-        return my_json["email"]
 
     @defer.inlineCallbacks
     def _getFiles(self, prnumber):
@@ -168,6 +161,25 @@ class GitHubPullrequestPoller(base.ReconfigurablePollingChangeSource,
         my_json = yield result.json()
 
         return [f["filename"] for f in my_json]
+
+    @defer.inlineCallbacks
+    def _getCommitters(self, prnumber):
+        result = yield self._http.get("/".join([
+            '/repos', self.owner, self.repo, 'pulls', str(prnumber), 'commits'
+        ]))
+        my_json = yield result.json()
+
+        return [[c["commit"]["committer"]["name"],
+                 c["commit"]["committer"]["email"]] for c in my_json]
+
+    @defer.inlineCallbacks
+    def _getAuthors(self, prnumber):
+        result = yield self._http.get("/".join([
+            '/repos', self.owner, self.repo, 'pulls', str(prnumber), 'commits'
+        ]))
+        my_json = yield result.json()
+
+        return [[a["commit"]["author"]["name"], a["commit"]["author"]["email"]] for a in my_json]
 
     @defer.inlineCallbacks
     def _getCurrentRev(self, prnumber):
@@ -189,8 +201,8 @@ class GitHubPullrequestPoller(base.ReconfigurablePollingChangeSource,
     @defer.inlineCallbacks
     def _getStateObjectId(self):
         # Return a deferred for object id in state db.
-        result = yield self.master.db.state.getObjectId(
-            '%s/%s' % (self.owner, self.repo), self.db_class_name)
+        result = yield self.master.db.state.getObjectId('{}/{}'.format(self.owner, self.repo),
+                                                        self.db_class_name)
         return result
 
     @defer.inlineCallbacks
@@ -225,13 +237,13 @@ class GitHubPullrequestPoller(base.ReconfigurablePollingChangeSource,
                 # update database
                 yield self._setCurrentRev(prnumber, revision)
 
-                author = pr['user']['login']
                 project = pr['base']['repo']['full_name']
                 commits = pr['commits']
 
                 dl = defer.DeferredList(
-                    [self._getFiles(prnumber), self._getEmail(author)],
-                    consumeErrors=True)
+                     [self._getAuthors(prnumber), self._getCommitters(prnumber),
+                      self._getFiles(prnumber)],
+                     consumeErrors=True)
 
                 results = yield dl
                 failures = [r[1] for r in results if not r[0]]
@@ -242,16 +254,18 @@ class GitHubPullrequestPoller(base.ReconfigurablePollingChangeSource,
                                       prnumber, revision))
                         # Fail on the first error!
                         failures[0].raiseException()
-                [files, email] = [r[1] for r in results]
+                [authors, committers, files] = [r[1] for r in results]
 
-                if email is not None and email != "null":
-                    author += " <" + str(email) + ">"
+                author = authors[0][0] + " <" + authors[0][1] + ">"
+
+                committer = committers[0][0] + " <" + committers[0][1] + ">"
 
                 properties = self.extractProperties(pr)
 
                 # emit the change
                 yield self.master.data.updates.addChange(
-                    author=bytes2unicode(author),
+                    author=author,
+                    committer=committer,
                     revision=bytes2unicode(revision),
                     revlink=bytes2unicode(revlink),
                     comments='GitHub Pull Request #{0} ({1} commit{2})\n{3}\n{4}'.

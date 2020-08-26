@@ -26,6 +26,7 @@ import requests
 from twisted.internet import defer
 from twisted.internet import threads
 
+import buildbot
 from buildbot import config
 from buildbot.process.properties import Properties
 from buildbot.util import bytes2unicode
@@ -50,16 +51,13 @@ class OAuth2LoginResource(auth.LoginResource):
     @defer.inlineCallbacks
     def renderLogin(self, request):
         code = request.args.get(b"code", [b""])[0]
-        token = request.args.get(b"token", [b""])[0]
-        if not token and not code:
+        if not code:
             url = request.args.get(b"redirect", [None])[0]
             url = yield self.auth.getLoginURL(url)
             raise resource.Redirect(url)
 
-        if not token:
-            details = yield self.auth.verifyCode(code)
-        else:
-            details = yield self.auth.acceptToken(token)
+        details = yield self.auth.verifyCode(code)
+
         if self.auth.userInfoProvider is not None:
             infos = yield self.auth.userInfoProvider.getUserInfo(details['username'])
             details.update(infos)
@@ -121,7 +119,7 @@ class OAuth2Auth(auth.AuthBase):
             oauth_params['state'] = urlencode(dict(redirect=redirect_url))
         oauth_params.update(self.authUriAdditionalParams)
         sorted_oauth_params = sorted(oauth_params.items(), key=lambda val: val[0])
-        return "%s?%s" % (self.authUri, urlencode(sorted_oauth_params))
+        return "{}?{}".format(self.authUri, urlencode(sorted_oauth_params))
 
     def createSessionFromToken(self, token):
         s = requests.Session()
@@ -132,14 +130,6 @@ class OAuth2Auth(auth.AuthBase):
     def get(self, session, path):
         ret = session.get(self.resourceEndpoint + path)
         return ret.json()
-
-    # If the user wants to authenticate directly with an access token they
-    # already have, go ahead and just directly accept an access_token from them.
-    def acceptToken(self, token):
-        def thd():
-            session = self.createSessionFromToken({'access_token': token})
-            return self.getUserInfoFromOAuthClient(session)
-        return threads.deferToThread(thd)
 
     # based on https://github.com/maraujop/requests-oauth
     # from Miguel Araujo, augmented to support header based clientSecret
@@ -295,6 +285,15 @@ class GitHubAuth(OAuth2Auth):
                     username=user['login'],
                     groups=[org['login'] for org in orgs])
 
+    def createSessionFromToken(self, token):
+        s = requests.Session()
+        s.headers = {
+            'Authorization': 'token ' + token['access_token'],
+            'User-Agent': 'buildbot/{}'.format(buildbot.version),
+        }
+        s.verify = self.sslVerify
+        return s
+
     def getUserInfoFromOAuthClient_v4(self, c):
         graphql_query = textwrap.dedent('''
             query {
@@ -348,8 +347,8 @@ class GitHubAuth(OAuth2Auth):
                         # identical with the inclusion of the organization
                         # since different organizations might share a common
                         # team name
-                        teams.add('%s/%s' % (orgs_name_slug_mapping[org], node['node']['name']))
-                        teams.add('%s/%s' % (orgs_name_slug_mapping[org], node['node']['slug']))
+                        teams.add('{}/{}'.format(orgs_name_slug_mapping[org], node['node']['name']))
+                        teams.add('{}/{}'.format(orgs_name_slug_mapping[org], node['node']['slug']))
                 user_info['groups'].extend(sorted(teams))
         if self.debug:
             log.info('{klass} User Details: {user_info}',
@@ -364,9 +363,9 @@ class GitLabAuth(OAuth2Auth):
 
     def __init__(self, instanceUri, clientId, clientSecret, **kwargs):
         uri = instanceUri.rstrip("/")
-        self.authUri = "%s/oauth/authorize" % uri
-        self.tokenUri = "%s/oauth/token" % uri
-        self.resourceEndpoint = "%s/api/v4" % uri
+        self.authUri = "{}/oauth/authorize".format(uri)
+        self.tokenUri = "{}/oauth/token".format(uri)
+        self.resourceEndpoint = "{}/api/v4".format(uri)
         super(GitLabAuth, self).__init__(clientId, clientSecret, **kwargs)
 
     def getUserInfoFromOAuthClient(self, c):

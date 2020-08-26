@@ -13,9 +13,6 @@
 #
 # Copyright Buildbot Team Members
 
-from __future__ import absolute_import
-from __future__ import print_function
-
 import os
 from unittest.case import SkipTest
 
@@ -39,7 +36,8 @@ from buildbot.worker import kubernetes
 # minikube start # [--vm-driver=kvm]
 #
 # export masterFQDN=$(ip route get $(minikube ip)| awk '{ print $5 }')
-# export KUBE_NAMESPACE=`kubectl config get-contexts \`kubectl config current-context\` |tail -n1 |awk '{print $5}'`
+# export KUBE_NAMESPACE=`kubectl config get-contexts \`kubectl config current-context\`
+# |tail -n1 |awk '{print $5}'`
 
 # useful commands:
 #  - 'minikube dashboard' to display WebUI of the kubernetes cluster

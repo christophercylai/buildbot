@@ -19,6 +19,7 @@ from zope.interface import implementer
 
 from buildbot.config import BuilderConfig
 from buildbot.interfaces import IBuildStepFactory
+from buildbot.machine.base import Machine
 from buildbot.process.buildstep import BuildStep
 from buildbot.process.factory import BuildFactory
 from buildbot.process.results import CANCELLED
@@ -162,6 +163,90 @@ class Tests(RunFakeMasterTestCase):
         )
 
         self.assertEqual(len(started_builds), 1)
+
+    @defer.inlineCallbacks
+    def test_worker_registered_to_machine(self):
+        worker = self.createLocalWorker('worker1', machine_name='machine1')
+        machine = Machine('machine1')
+
+        config_dict = {
+            'builders': [
+                BuilderConfig(name="builder1",
+                              workernames=["worker1"],
+                              factory=BuildFactory(),
+                              ),
+            ],
+            'workers': [worker],
+            'machines': [machine],
+            'protocols': {'null': {}},
+            'multiMaster': True,
+        }
+
+        yield self.getMaster(config_dict)
+
+        self.assertIs(worker.machine, machine)
+
+    @defer.inlineCallbacks
+    def test_worker_reconfigure_with_new_builder(self):
+        """
+        Checks if we can successfully reconfigure if we add new builders to worker.
+        """
+        config_dict = {
+            'builders': [
+                BuilderConfig(name="builder1",
+                              workernames=['local1'],
+                              factory=BuildFactory()),
+            ],
+            'workers': [self.createLocalWorker('local1', max_builds=1)],
+            'protocols': {'null': {}},
+            # Disable checks about missing scheduler.
+            'multiMaster': True,
+        }
+        yield self.getMaster(config_dict)
+
+        config_dict['builders'] += [
+            BuilderConfig(name="builder2",
+                          workernames=['local1'],
+                          factory=BuildFactory()),
+        ]
+        config_dict['workers'] = [self.createLocalWorker('local1', max_builds=2)]
+
+        # reconfig should succeed
+        yield self.reconfigMaster(config_dict)
+
+    @defer.inlineCallbacks
+    def test_worker_os_release_info_roundtrip(self):
+        """
+        Checks if we can successfully get information about the platform the worker is running on.
+        This is very similar to test_worker_comm.TestWorkerComm.test_worker_info, except that
+        we check details such as whether the information is passed in correct encoding.
+        """
+        worker = self.createLocalWorker('local1')
+
+        config_dict = {
+            'builders': [
+                BuilderConfig(name="builder1",
+                              workernames=['local1'],
+                              factory=BuildFactory()),
+            ],
+            'workers': [worker],
+            'protocols': {'null': {}},
+            # Disable checks about missing scheduler.
+            'multiMaster': True,
+        }
+        yield self.getMaster(config_dict)
+
+        props = worker.worker_status.info
+
+        from buildbot_worker.base import BotBase
+
+        expected_props_dict = {}
+        BotBase._read_os_release(BotBase.os_release_file, expected_props_dict)
+
+        for key, value in expected_props_dict.items():
+            self.assertTrue(isinstance(key, str))
+            self.assertTrue(isinstance(value, str))
+            self.assertEqual(props.getProperty(key), value)
 
     if RemoteWorker is None:
         skip = "buildbot-worker package is not installed"

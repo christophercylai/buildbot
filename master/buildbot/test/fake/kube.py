@@ -13,9 +13,6 @@
 #
 # Copyright Buildbot Team Members
 
-from __future__ import absolute_import
-from __future__ import print_function
-
 import copy
 import time
 
@@ -35,7 +32,10 @@ class KubeClientService(fakehttpclientservice.HTTPClientService):
     def createPod(self, namespace, spec):
         if 'metadata' not in spec:
             raise KubeError({
-                'message': 'Pod "" is invalid: metadata.name: Required value: name or generateName is required'})
+                'message':
+                    'Pod "" is invalid: metadata.name: '
+                    'Required value: name or generateName is required'
+            })
         name = spec['metadata']['name']
         pod = {
             'kind': 'Pod',

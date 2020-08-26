@@ -187,8 +187,8 @@ class CopyDirectory(base.Command):
                 os.makedirs(os.path.dirname(todir))
             if os.path.exists(todir):
                 # I don't think this happens, but just in case..
-                log.msg(
-                    "cp target '{0}' already exists -- cp will not do what you think!".format(todir))
+                log.msg(("cp target '{0}' already exists -- cp will not do what you think!"
+                         ).format(todir))
 
             command = ['cp', '-R', '-P', '-p', '-v', fromdir, todir]
             c = runprocess.RunProcess(self.builder, command, self.builder.basedir,
@@ -235,7 +235,11 @@ class GlobPath(base.Command):
         pathname = os.path.join(self.builder.basedir, self.args['path'])
 
         try:
-            files = glob.glob(pathname)
+            # recursive matching is only support in python3.5+
+            if sys.version_info[:2] >= (3, 5):
+                files = glob.glob(pathname, recursive=True)
+            else:
+                files = glob.glob(pathname)
             self.sendStatus({'files': files})
             self.sendStatus({'rc': 0})
         except OSError as e:

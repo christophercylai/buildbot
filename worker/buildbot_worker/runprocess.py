@@ -88,7 +88,8 @@ def shell_quote(cmd_list, unicode_encoding='utf-8'):
     if runtime.platformType == 'win32':
         return win32_batch_quote(cmd_list, unicode_encoding)
 
-    import pipes  # only available on unix
+    # only available on unix
+    import pipes   # pylint: disable=import-outside-toplevel
 
     def quote(e):
         if not e:
@@ -101,10 +102,13 @@ def shell_quote(cmd_list, unicode_encoding='utf-8'):
 class LogFileWatcher(object):
     POLL_INTERVAL = 2
 
-    def __init__(self, command, name, logfile, follow=False):
+    def __init__(self, command, name, logfile, follow=False, poll=True):
         self.command = command
         self.name = name
         self.logfile = logfile
+        decoderFactory = getincrementaldecoder(
+            self.command.builder.unicode_encoding)
+        self.logDecode = decoderFactory(errors='replace')
 
         log.msg("LogFileWatcher created to watch {0}".format(logfile))
         # we are created before the ShellCommand starts. If the logfile we're
@@ -118,7 +122,7 @@ class LogFileWatcher(object):
         self.follow = follow
 
         # every 2 seconds we check on the file again
-        self.poller = task.LoopingCall(self.poll)
+        self.poller = task.LoopingCall(self.poll) if poll else None
 
     def start(self):
         self.poller.start(self.POLL_INTERVAL).addErrback(self._cleanupPoll)
@@ -163,7 +167,8 @@ class LogFileWatcher(object):
             data = self.f.read(10000)
             if not data:
                 return
-            self.command.addLogfile(self.name, data)
+            decodedData = self.logDecode.decode(data)
+            self.command.addLogfile(self.name, decodedData)
 
 
 if runtime.platformType == 'posix':
@@ -544,8 +549,10 @@ class RunProcess(object):
             msg = u" environment:\n"
             env_names = sorted(self.environ.keys())
             for name in env_names:
-                msg += u"  {0}={1}\n".format(bytes2unicode(name, encoding=self.builder.unicode_encoding),
-                                             bytes2unicode(self.environ[name], encoding=self.builder.unicode_encoding))
+                msg += u"  {0}={1}\n".format(bytes2unicode(name,
+                                                           encoding=self.builder.unicode_encoding),
+                                             bytes2unicode(self.environ[name],
+                                                           encoding=self.builder.unicode_encoding))
             log.msg(u" environment:\n{0}".format(pprint.pformat(self.environ)))
             self._addToBuffers(u'header', msg)
 

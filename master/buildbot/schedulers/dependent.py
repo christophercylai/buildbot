@@ -80,7 +80,7 @@ class Dependent(base.BaseScheduler):
     def _buildset_new_cb(self, key, msg):
         # check if this was submitted by our upstream
         if msg['scheduler'] != self.upstream_name:
-            return
+            return None
 
         # record our interest in this buildset
         return self._addUpstreamBuildset(msg['bsid'])
@@ -106,7 +106,7 @@ class Dependent(base.BaseScheduler):
             # differ from one another)
             if sub_results in (SUCCESS, WARNINGS):
                 yield self.addBuildsetForSourceStamps(
-                    sourcestamps=[ssid for ssid in sub_ssids],
+                    sourcestamps=sub_ssids.copy(),
                     reason='downstream')
 
             sub_bsids.append(sub_bsid)

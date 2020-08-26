@@ -26,6 +26,7 @@ from buildbot.interfaces import IWorker
 from buildbot.process import metrics
 from buildbot.process.properties import Properties
 from buildbot.status.worker import WorkerStatus
+from buildbot.util import Notifier
 from buildbot.util import bytes2unicode
 from buildbot.util import service
 from buildbot.util.eventual import eventually
@@ -61,7 +62,9 @@ class AbstractWorker(service.BuildbotService):
                     notify_on_missing=None,
                     missing_timeout=None,
                     properties=None, defaultProperties=None,
-                    locks=None, keepalive_interval=DEFAULT_KEEPALIVE_INTERVAL):
+                    locks=None,
+                    keepalive_interval=DEFAULT_KEEPALIVE_INTERVAL,
+                    machine_name=None):
         """
         @param name: botname this machine will supply when it connects
         @param password: password this machine will supply when
@@ -79,8 +82,11 @@ class AbstractWorker(service.BuildbotService):
         @param locks: A list of locks that must be acquired before this worker
                       can be used
         @type locks: dictionary
+        @param machine_name: The name of the machine to associate with the
+                             worker.
         """
         self.name = name = bytes2unicode(name)
+        self.machine_name = machine_name
 
         self.password = password
 
@@ -109,6 +115,11 @@ class AbstractWorker(service.BuildbotService):
         self.defaultProperties = Properties()
         self.defaultProperties.update(defaultProperties or {}, "Worker")
 
+        if self.machine_name is not None:
+            self.properties.setProperty('machine_name', self.machine_name,
+                                        'Worker')
+        self.machine = None
+
         self.lastMessageReceived = 0
 
         if notify_on_missing is None:
@@ -127,11 +138,17 @@ class AbstractWorker(service.BuildbotService):
         # a protocol connection, if we're currently connected
         self.conn = None
 
+        # during disconnection self.conn will be set to None before all disconnection notifications
+        # are delivered. During that period _pending_disconnection_delivery_notifier will be set to
+        # a notifier and allows interested users to wait until all disconnection notifications are
+        # delivered.
+        self._pending_disconnection_delivery_notifier = None
+
         self._old_builder_list = None
         self._configured_builderid_list = None
 
     def __repr__(self):
-        return "<%s %r>" % (self.__class__.__name__, self.name)
+        return "<{} {}>".format(self.__class__.__name__, repr(self.name))
 
     @property
     def workername(self):
@@ -144,6 +161,7 @@ class AbstractWorker(service.BuildbotService):
             return None
         return self.master.botmaster
 
+    @defer.inlineCallbacks
     def updateLocks(self):
         """Convert the L{LockAccess} objects in C{self.locks} into real lock
         objects, while also maintaining the subscriptions to lock releases."""
@@ -152,8 +170,8 @@ class AbstractWorker(service.BuildbotService):
             s.unsubscribe()
 
         # convert locks into their real form
-        locks = [(self.botmaster.getLockFromLockAccess(a), a)
-                 for a in self.access]
+        locks = yield self.botmaster.getLockFromLockAccesses(self.access, self.config_version)
+
         self.locks = [(l.getLockForWorker(self.workername), la)
                       for l, la in locks]
         self.lock_subscriptions = [l.subscribeToReleases(self._lockReleased)
@@ -178,9 +196,9 @@ class AbstractWorker(service.BuildbotService):
         my caller should give up the build and try to get another worker
         to look at it.
         """
-        log.msg("acquireLocks(worker %s, locks %s)" % (self, self.locks))
+        log.msg("acquireLocks(worker {}, locks {})".format(self, self.locks))
         if not self.locksAvailable():
-            log.msg("worker %s can't lock, giving up" % (self, ))
+            log.msg("worker {} can't lock, giving up".format(self))
             return False
         # all locks are available, claim them all
         for lock, access in self.locks:
@@ -191,7 +209,7 @@ class AbstractWorker(service.BuildbotService):
         """
         I am called to release any locks after a build has finished
         """
-        log.msg("releaseLocks(%s): %s" % (self, self.locks))
+        log.msg("releaseLocks({}): {}".format(self, self.locks))
         for lock, access in self.locks:
             lock.release(self, access)
 
@@ -211,6 +229,12 @@ class AbstractWorker(service.BuildbotService):
         self.worker_status.setAccessURI(info.get("access_uri", None))
         self.worker_status.setVersion(info.get("version", "(unknown)"))
 
+        # store everything as Properties
+        for k, v in info.items():
+            if k in ('environ', 'worker_commands'):
+                continue
+            self.worker_status.info.setProperty(k, v, "Worker")
+
     @defer.inlineCallbacks
     def _getWorkerInfo(self):
         worker = yield self.master.data.get(
@@ -226,6 +250,9 @@ class AbstractWorker(service.BuildbotService):
 
     @defer.inlineCallbacks
     def startService(self):
+        # tracks config version for locks
+        self.config_version = self.master.config_version
+
         self.updateLocks()
         self.workerid = yield self.master.data.updates.findWorkerId(
             self.name)
@@ -246,7 +273,9 @@ class AbstractWorker(service.BuildbotService):
     def reconfigService(self, name, password, max_builds=None,
                         notify_on_missing=None, missing_timeout=DEFAULT_MISSING_TIMEOUT,
                         properties=None, defaultProperties=None,
-                        locks=None, keepalive_interval=DEFAULT_KEEPALIVE_INTERVAL):
+                        locks=None,
+                        keepalive_interval=DEFAULT_KEEPALIVE_INTERVAL,
+                        machine_name=None):
         # Given a Worker config arguments, configure this one identically.
         # Because Worker objects are remotely referenced, we can't replace them
         # without disconnecting the worker, yet there's no reason to do that.
@@ -278,16 +307,36 @@ class AbstractWorker(service.BuildbotService):
         self.defaultProperties = Properties()
         self.defaultProperties.update(defaultProperties or {}, "Worker")
 
+        # Note that before first reconfig self.machine will always be None and
+        # out of sync with self.machine_name, thus more complex logic is needed.
+        if self.machine is not None and self.machine_name != machine_name:
+            self.machine.unregisterWorker(self)
+            self.machine = None
+
+        self.machine_name = machine_name
+        if self.machine is None and self.machine_name is not None:
+            self.machine = self.master.machine_manager.getMachineByName(self.machine_name)
+            if self.machine is not None:
+                self.machine.registerWorker(self)
+                self.properties.setProperty("machine_name", self.machine_name,
+                                            "Worker")
+            else:
+                log.err("Unknown machine '{}' for worker '{}'".format(
+                    self.machine_name, self.name))
+
         # update our records with the worker manager
         if not self.registration:
             self.registration = yield self.master.workers.register(self)
         yield self.registration.update(self, self.master.config)
 
+        # tracks config version for locks
+        self.config_version = self.master.config_version
         self.updateLocks()
 
     @defer.inlineCallbacks
     def reconfigServiceWithSibling(self, sibling):
-        # reconfigServiceWithSibling will only reconfigure the worker when it is configured differently.
+        # reconfigServiceWithSibling will only reconfigure the worker when it is configured
+        # differently.
         # However, the worker configuration depends on which builder it is configured
         yield super().reconfigServiceWithSibling(sibling)
 
@@ -298,7 +347,8 @@ class AbstractWorker(service.BuildbotService):
             b.getBuilderId() for b in self.botmaster.getBuildersForWorker(self.name)]
         bids = yield defer.gatherResults(bids, consumeErrors=True)
         if self._configured_builderid_list != bids:
-            yield self.master.data.updates.workerConfigured(self.workerid, self.master.masterid, bids)
+            yield self.master.data.updates.workerConfigured(self.workerid, self.master.masterid,
+                                                            bids)
             yield self.updateWorker()
             self._configured_builderid_list = bids
 
@@ -312,6 +362,13 @@ class AbstractWorker(service.BuildbotService):
         self.stopQuarantineTimer()
         # mark this worker as configured for zero builders in this master
         yield self.master.data.updates.workerConfigured(self.workerid, self.master.masterid, [])
+
+        # during master shutdown we need to wait until the disconnection notification deliveries
+        # are completed, otherwise some of the events may still be firing long after the master
+        # is completely shut down.
+        yield self.disconnect()
+        yield self.waitForCompleteShutdown()
+
         yield super().stopService()
 
     def isCompatibleWithBuild(self, build_props):
@@ -428,6 +485,13 @@ class AbstractWorker(service.BuildbotService):
                     name, self.defaultProperties.getProperty(name), "Worker")
 
     @defer.inlineCallbacks
+    def _handle_disconnection_delivery_notifier(self):
+        self._pending_disconnection_delivery_notifier = Notifier()
+        yield self.conn.waitForNotifyDisconnectedDelivered()
+        self._pending_disconnection_delivery_notifier.notify(None)
+        self._pending_disconnection_delivery_notifier = None
+
+    @defer.inlineCallbacks
     def detached(self):
         # protect against race conditions in conn disconnect path and someone
         # calling detached directly. At the moment the null worker does that.
@@ -435,10 +499,14 @@ class AbstractWorker(service.BuildbotService):
             return
 
         metrics.MetricCountEvent.log("AbstractWorker.attached_workers", -1)
+
+        self._handle_disconnection_delivery_notifier()
+
+        yield self.conn.waitShutdown()
         self.conn = None
         self._old_builder_list = []
         self.worker_status.setConnected(False)
-        log.msg("Worker.detached(%s)" % (self.name,))
+        log.msg("Worker.detached({})".format(self.name))
         self.releaseLocks()
         yield self.master.data.updates.workerDisconnected(
             workerid=self.workerid,
@@ -462,27 +530,36 @@ class AbstractWorker(service.BuildbotService):
         """
         if self.conn is None:
             return defer.succeed(None)
-        log.msg("disconnecting old worker %s now" % (self.name,))
+        log.msg("disconnecting old worker {} now".format(self.name))
         # When this Deferred fires, we'll be ready to accept the new worker
         return self._disconnect(self.conn)
 
-    def _disconnect(self, conn):
-        # all kinds of teardown will happen as a result of
-        # loseConnection(), but it happens after a reactor iteration or
-        # two. Hook the actual disconnect so we can know when it is safe
-        # to connect the new worker. We have to wait one additional
-        # iteration (with callLater(0)) to make sure the *other*
-        # notifyOnDisconnect handlers have had a chance to run.
-        d = defer.Deferred()
+    def waitForCompleteShutdown(self):
+        # This function waits until the disconnection to happen and the disconnection
+        # notifications have been delivered and acted upon.
+        return self._waitForCompleteShutdownImpl(self.conn)
 
-        # notifyOnDisconnect runs the callback
-        def _disconnected():
-            eventually(d.callback, None)
-        conn.notifyOnDisconnect(_disconnected)
+    @defer.inlineCallbacks
+    def _waitForCompleteShutdownImpl(self, conn):
+        if conn:
+            d = defer.Deferred()
+
+            def _disconnected():
+                eventually(d.callback, None)
+            conn.notifyOnDisconnect(_disconnected)
+            yield d
+            yield conn.waitForNotifyDisconnectedDelivered()
+        elif self._pending_disconnection_delivery_notifier is not None:
+            yield self._pending_disconnection_delivery_notifier.wait()
+
+    @defer.inlineCallbacks
+    def _disconnect(self, conn):
+        # This function waits until the disconnection to happen and the disconnection
+        # notifications have been delivered and acted upon
+        d = self._waitForCompleteShutdownImpl(conn)
         conn.loseConnection()
         log.msg("waiting for worker to finish disconnecting")
-
-        return d
+        yield d
 
     @defer.inlineCallbacks
     def sendBuilderList(self):
@@ -523,6 +600,7 @@ class AbstractWorker(service.BuildbotService):
             self.unpause()
         if key[-1] == "kill":
             self.shutdown()
+        return None
 
     def shutdownRequested(self):
         self._graceful = True
@@ -640,8 +718,9 @@ class AbstractWorker(service.BuildbotService):
 
 class Worker(AbstractWorker):
 
+    @defer.inlineCallbacks
     def detached(self):
-        super().detached()
+        yield super().detached()
         self.botmaster.workerLost(self)
         self.startMissingTimer()
 
@@ -650,7 +729,7 @@ class Worker(AbstractWorker):
         try:
             yield super().attached(bot)
         except Exception as e:
-            log.err(e, "worker %s cannot attach" % (self.name,))
+            log.err(e, "worker {} cannot attach".format(self.name))
             return
 
     def buildFinished(self, wfb):
