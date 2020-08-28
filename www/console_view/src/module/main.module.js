@@ -71,7 +71,7 @@ class ConsoleState {
 
 class Console {
     constructor($scope, $q, $window, dataService, bbSettingsService, resultsService,
-    glTopbarContextualActionsService, $uibModal, $timeout) {
+        $uibModal, $timeout) {
         this.onChange = this.onChange.bind(this);
         this._onChange = this._onChange.bind(this);
         this.matchBuildWithChange = this.matchBuildWithChange.bind(this);
