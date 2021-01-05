@@ -22,7 +22,7 @@ from twisted.python import log
 from twisted.trial import unittest
 
 from buildbot import locks
-from buildbot.interfaces import WorkerTooOldError
+from buildbot.interfaces import WorkerSetupError
 from buildbot.plugins import util
 from buildbot.process import buildstep
 from buildbot.process import properties
@@ -143,7 +143,7 @@ class TestBuildStep(steps.BuildStepMixin, config.ConfigErrorsMixin,
     def test_getProperty(self):
         bs = buildstep.BuildStep()
         bs.build = fakebuild.FakeBuild()
-        props = bs.build.build_status.properties = mock.Mock()
+        props = bs.build.properties = mock.Mock()
         bs.getProperty("xyz", 'b')
         props.getProperty.assert_called_with("xyz", 'b')
         bs.getProperty("xyz")
@@ -152,7 +152,7 @@ class TestBuildStep(steps.BuildStepMixin, config.ConfigErrorsMixin,
     def test_setProperty(self):
         bs = buildstep.BuildStep()
         bs.build = fakebuild.FakeBuild()
-        props = bs.build.build_status.properties = mock.Mock()
+        props = bs.build.properties = mock.Mock()
         bs.setProperty("x", "y", "t")
         props.setProperty.assert_called_with("x", "y", "t", runtime=True)
         bs.setProperty("x", "abc", "test", runtime=True)
@@ -688,7 +688,7 @@ class TestBuildStep(steps.BuildStepMixin, config.ConfigErrorsMixin,
 
         # make sure appropriate exception is raised
         step = buildstep.BuildStep()
-        with self.assertRaisesRegex(WorkerTooOldError,
+        with self.assertRaisesRegex(WorkerSetupError,
                                     "worker is too old, does not know about foo"):
             step.checkWorkerHasCommand("foo")
 

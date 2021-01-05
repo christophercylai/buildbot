@@ -107,17 +107,15 @@ class AbstractWorkerForBuilder:
         yield self.worker.conn.remotePrint(message="attached")
         return self
 
-    def prepare(self, build):
-        if not self.worker or not self.worker.acquireLocks():
-            return defer.succeed(False)
+    def substantiate_if_needed(self, build):
         return defer.succeed(True)
 
-    def ping(self, status=None):
+    def insubstantiate_if_needed(self):
+        pass
+
+    def ping(self):
         """Ping the worker to make sure it is still there. Returns a Deferred
         that fires with True if it is.
-
-        @param status: if you point this at a BuilderStatus, a 'pinging'
-                       event will be pushed.
         """
         newping = not self.ping_watchers
         d = defer.Deferred()
@@ -214,14 +212,13 @@ class LatentWorkerForBuilder(AbstractWorkerForBuilder):
         self.worker.addWorkerForBuilder(self)
         log.msg("Latent worker {} attached to {}".format(worker.workername, self.builder_name))
 
-    def prepare(self, build):
-        # If we can't lock, then don't bother trying to substantiate
-        if not self.worker or not self.worker.acquireLocks():
-            return defer.succeed(False)
-
+    def substantiate_if_needed(self, build):
         self.state = States.DETACHED
         d = self.substantiate(build)
         return d
+
+    def insubstantiate_if_needed(self):
+        self.worker.insubstantiate()
 
     def attached(self, worker, commands):
         # When a latent worker is attached, it is actually because it prepared for a build
@@ -233,7 +230,7 @@ class LatentWorkerForBuilder(AbstractWorkerForBuilder):
     def substantiate(self, build):
         return self.worker.substantiate(self, build)
 
-    def ping(self, status=None):
+    def ping(self):
         if not self.worker.substantiated:
             return defer.fail(PingException("worker is not substantiated"))
-        return super().ping(status)
+        return super().ping()

@@ -21,20 +21,21 @@ from twisted.internet import error
 from twisted.python import reflect
 from twisted.trial import unittest
 
-from buildbot import config
 from buildbot.process.results import RETRY
 from buildbot.process.results import SUCCESS
 from buildbot.steps.source.p4 import P4
 from buildbot.test.fake.remotecommand import Expect
 from buildbot.test.fake.remotecommand import ExpectShell
 from buildbot.test.util import sourcesteps
+from buildbot.test.util.config import ConfigErrorsMixin
 from buildbot.test.util.misc import TestReactorMixin
 from buildbot.test.util.properties import ConstantRenderable
 
 _is_windows = (platform.system() == 'Windows')
 
 
-class TestP4(sourcesteps.SourceStepMixin, TestReactorMixin, unittest.TestCase):
+class TestP4(sourcesteps.SourceStepMixin, TestReactorMixin, ConfigErrorsMixin,
+             unittest.TestCase):
 
     def setUp(self):
         self.setUpTestReactor()
@@ -58,36 +59,55 @@ class TestP4(sourcesteps.SourceStepMixin, TestReactorMixin, unittest.TestCase):
         self.properties.setProperty('builddir', workspace_dir, 'P4')
 
     def test_no_empty_step_config(self):
-        with self.assertRaises(config.ConfigErrors):
+        with self.assertRaisesConfigError('You must provide p4base or p4viewspec'):
             P4()
 
+    def test_p4base_has_whitespace(self):
+        with self.assertRaisesConfigError(
+                'p4base should not end with a trailing / [p4base = //depot with space/]'):
+            P4(p4base='//depot with space/')
+
+    def test_p4branch_has_whitespace(self):
+        with self.assertRaisesConfigError(
+                'p4base should not end with a trailing / [p4base = //depot/]'):
+            P4(p4base='//depot/', p4branch='branch with space')
+
+    def test_no_p4base_has_leading_slash_step_config(self):
+        with self.assertRaisesConfigError('p4base should start with // [p4base = depot/]'):
+            P4(p4base='depot/')
+
     def test_no_multiple_type_step_config(self):
-        with self.assertRaises(config.ConfigErrors):
+        with self.assertRaisesConfigError(
+                'Either provide p4viewspec or p4base and p4branch (and optionally p4extra_views)'):
             P4(p4viewspec=('//depot/trunk', ''), p4base='//depot',
-            p4branch='trunk', p4extra_views=['src', 'doc'])
+               p4branch='trunk', p4extra_views=['src', 'doc'])
 
     def test_no_p4viewspec_is_string_step_config(self):
-        with self.assertRaises(config.ConfigErrors):
+        with self.assertRaisesConfigError(
+                'p4viewspec must not be a string, and should be a sequence of 2 element sequences'):
             P4(p4viewspec='a_bad_idea')
 
     def test_no_p4base_has_trailing_slash_step_config(self):
-        with self.assertRaises(config.ConfigErrors):
+        with self.assertRaisesConfigError(
+                'p4base should not end with a trailing / [p4base = //depot/]'):
             P4(p4base='//depot/')
 
     def test_no_p4branch_has_trailing_slash_step_config(self):
-        with self.assertRaises(config.ConfigErrors):
+        with self.assertRaisesConfigError(
+                'p4branch should not end with a trailing / [p4branch = blah/]'):
             P4(p4base='//depot', p4branch='blah/')
 
     def test_no_p4branch_with_no_p4base_step_config(self):
-        with self.assertRaises(config.ConfigErrors):
+        with self.assertRaisesConfigError('You must provide p4base or p4viewspec'):
             P4(p4branch='blah')
 
     def test_no_p4extra_views_with_no_p4base_step_config(self):
-        with self.assertRaises(config.ConfigErrors):
+        with self.assertRaisesConfigError('You must provide p4base or p4viewspec'):
             P4(p4extra_views='blah')
 
     def test_incorrect_mode(self):
-        with self.assertRaises(config.ConfigErrors):
+        with self.assertRaisesConfigError(
+                "mode invalid is not an IRenderable, or one of ('incremental', 'full')"):
             P4(p4base='//depot', mode='invalid')
 
     def test_mode_incremental_p4base_with_revision(self):
@@ -894,6 +914,60 @@ class TestP4(sourcesteps.SourceStepMixin, TestReactorMixin, unittest.TestCase):
         LineEnd:\tlocal
 
         Stream:\t//depot/trunk
+        ''' % root_dir)
+        self._full(client_stdin=client_spec)
+
+    def test_mode_full_stream_renderable_p4base(self):
+        self.setupStep(P4(p4port='localhost:12000', mode='full',
+                          p4base=ConstantRenderable('//depot'), p4branch='trunk',
+                          p4user='user', p4client='p4_client1', p4passwd='pass',
+                          stream=True))
+
+        root_dir = '/home/user/workspace/wkdir'
+        if _is_windows:
+            root_dir = r'C:\Users\username\Workspace\wkdir'
+        client_spec = textwrap.dedent('''\
+        Client: p4_client1
+
+        Owner: user
+
+        Description:
+        \tCreated by user
+
+        Root:\t%s
+
+        Options:\tallwrite rmdir
+
+        LineEnd:\tlocal
+
+        Stream:\t//depot/trunk
+        ''' % root_dir)
+        self._full(client_stdin=client_spec)
+
+    def test_mode_full_stream_renderable_p4branch(self):
+        self.setupStep(P4(p4port='localhost:12000', mode='full',
+                          p4base='//depot', p4branch=ConstantRenderable('render_branch'),
+                          p4user='user', p4client='p4_client1', p4passwd='pass',
+                          stream=True))
+
+        root_dir = '/home/user/workspace/wkdir'
+        if _is_windows:
+            root_dir = r'C:\Users\username\Workspace\wkdir'
+        client_spec = textwrap.dedent('''\
+        Client: p4_client1
+
+        Owner: user
+
+        Description:
+        \tCreated by user
+
+        Root:\t%s
+
+        Options:\tallwrite rmdir
+
+        LineEnd:\tlocal
+
+        Stream:\t//depot/render_branch
         ''' % root_dir)
         self._full(client_stdin=client_spec)
 

@@ -27,28 +27,44 @@ from buildbot.process.results import RETRY
 from buildbot.process.results import SKIPPED
 from buildbot.process.results import SUCCESS
 from buildbot.process.results import WARNINGS
-from buildbot.reporters import http
+from buildbot.reporters.base import ReporterBase
+from buildbot.reporters.generators.build import BuildStartEndStatusGenerator
+from buildbot.reporters.message import MessageFormatterRenderable
 from buildbot.util import giturlparse
 from buildbot.util import httpclientservice
 
 HOSTED_BASE_URL = 'https://gitlab.com'
 
 
-class GitLabStatusPush(http.HttpStatusPushBase):
+class GitLabStatusPush(ReporterBase):
     name = "GitLabStatusPush"
-    neededDetails = dict(wantProperties=True)
+
+    def checkConfig(self, token, context=None, baseURL=None, verbose=False,
+                    debug=None, verify=None, generators=None,
+                    **kwargs):
+
+        if generators is None:
+            generators = self._create_default_generators()
+
+        super().checkConfig(generators=generators, **kwargs)
+        httpclientservice.HTTPClientService.checkAvailable(self.__class__.__name__)
 
     @defer.inlineCallbacks
-    def reconfigService(self, token,
-                        startDescription=None, endDescription=None,
-                        context=None, baseURL=None, verbose=False, **kwargs):
+    def reconfigService(self, token, context=None, baseURL=None, verbose=False,
+                        debug=None, verify=None, generators=None,
+                        **kwargs):
 
         token = yield self.renderSecrets(token)
-        yield super().reconfigService(**kwargs)
-
+        self.debug = debug
+        self.verify = verify
+        self.verbose = verbose
         self.context = context or Interpolate('buildbot/%(prop:buildername)s')
-        self.startDescription = startDescription or 'Build started.'
-        self.endDescription = endDescription or 'Build done.'
+
+        if generators is None:
+            generators = self._create_default_generators()
+
+        yield super().reconfigService(generators=generators, **kwargs)
+
         if baseURL is None:
             baseURL = HOSTED_BASE_URL
         if baseURL.endswith('/'):
@@ -57,8 +73,16 @@ class GitLabStatusPush(http.HttpStatusPushBase):
         self._http = yield httpclientservice.HTTPClientService.getService(
             self.master, baseURL, headers={'PRIVATE-TOKEN': token},
             debug=self.debug, verify=self.verify)
-        self.verbose = verbose
         self.project_ids = {}
+
+    def _create_default_generators(self):
+        start_formatter = MessageFormatterRenderable('Build started.')
+        end_formatter = MessageFormatterRenderable('Build done.')
+
+        return [
+            BuildStartEndStatusGenerator(start_formatter=start_formatter,
+                                         end_formatter=end_formatter)
+        ]
 
     def createStatus(self,
                      project_id, branch, sha, state, target_url=None,
@@ -113,9 +137,14 @@ class GitLabStatusPush(http.HttpStatusPushBase):
         return self.project_ids[project_full_name]
 
     @defer.inlineCallbacks
-    def send(self, build):
+    def sendMessage(self, reports):
+        report = reports[0]
+        build = reports[0]['builds'][0]
+
         props = Properties.fromDict(build['properties'])
         props.master = self.master
+
+        description = report.get('body', None)
 
         if build['complete']:
             state = {
@@ -127,10 +156,8 @@ class GitLabStatusPush(http.HttpStatusPushBase):
                 RETRY: 'pending',
                 CANCELLED: 'cancelled'
             }.get(build['results'], 'failed')
-            description = yield props.render(self.endDescription)
         else:
             state = 'running'
-            description = yield props.render(self.startDescription)
 
         context = yield props.render(self.context)
 

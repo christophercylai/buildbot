@@ -17,13 +17,13 @@ import json
 import os
 import shutil
 import sys
+from io import StringIO
 
 import mock
 
 import twisted
 from twisted.internet import defer
 from twisted.protocols import basic
-from twisted.python.compat import NativeStringIO
 from twisted.trial import unittest
 
 from buildbot.schedulers import trysched
@@ -44,12 +44,8 @@ class TryBase(scheduler.SchedulerMixin, TestReactorMixin, unittest.TestCase):
         self.tearDownScheduler()
 
     def makeScheduler(self, **kwargs):
-        sched = self.attachScheduler(trysched.Try_Userpass(**kwargs),
-                                     self.OBJECTID, self.SCHEDULERID)
-        # Try will return a remote version of master.status, so give it
-        # something to return
-        sched.master.status = mock.Mock()
-        return sched
+        return self.attachScheduler(trysched.Try_Userpass(**kwargs),
+                                    self.OBJECTID, self.SCHEDULERID)
 
     def test_filterBuilderList_ok(self):
         sched = trysched.TryBase(
@@ -222,7 +218,7 @@ class Try_Jobdir(scheduler.SchedulerMixin, TestReactorMixin, unittest.TestCase):
         sched = trysched.Try_Jobdir(
             name='tsched', builderNames=['a'], jobdir='foo')
         with self.assertRaises(trysched.BadJobfile):
-            sched.parseJob(NativeStringIO(''))
+            sched.parseJob(StringIO(''))
 
     def test_parseJob_longer_than_netstring_MAXLENGTH(self):
         self.patch(basic.NetstringReceiver, 'MAX_LENGTH', 100)
@@ -234,7 +230,7 @@ class Try_Jobdir(scheduler.SchedulerMixin, TestReactorMixin, unittest.TestCase):
         )
         jobstr += 'x' * 200
 
-        test_temp_file = NativeStringIO(jobstr)
+        test_temp_file = StringIO(jobstr)
 
         with self.assertRaises(trysched.BadJobfile):
             sched.parseJob(test_temp_file)
@@ -243,13 +239,13 @@ class Try_Jobdir(scheduler.SchedulerMixin, TestReactorMixin, unittest.TestCase):
         sched = trysched.Try_Jobdir(
             name='tsched', builderNames=['a'], jobdir='foo')
         with self.assertRaises(trysched.BadJobfile):
-            sched.parseJob(NativeStringIO('this is not a netstring'))
+            sched.parseJob(StringIO('this is not a netstring'))
 
     def test_parseJob_invalid_version(self):
         sched = trysched.Try_Jobdir(
             name='tsched', builderNames=['a'], jobdir='foo')
         with self.assertRaises(trysched.BadJobfile):
-            sched.parseJob(NativeStringIO('1:9,'))
+            sched.parseJob(StringIO('1:9,'))
 
     def makeNetstring(self, *strings):
         return ''.join(['{}:{},'.format(len(s), s) for s in strings])
@@ -261,7 +257,7 @@ class Try_Jobdir(scheduler.SchedulerMixin, TestReactorMixin, unittest.TestCase):
             '1', 'extid', 'trunk', '1234', '1', 'this is my diff, -- ++, etc.',
             'buildera', 'builderc'
         )
-        parsedjob = sched.parseJob(NativeStringIO(jobstr))
+        parsedjob = sched.parseJob(StringIO(jobstr))
         self.assertEqual(parsedjob, {
             'baserev': '1234',
             'branch': 'trunk',
@@ -284,7 +280,7 @@ class Try_Jobdir(scheduler.SchedulerMixin, TestReactorMixin, unittest.TestCase):
             '1', 'extid', '', '', '1', 'this is my diff, -- ++, etc.',
             'buildera', 'builderc'
         )
-        parsedjob = sched.parseJob(NativeStringIO(jobstr))
+        parsedjob = sched.parseJob(StringIO(jobstr))
         self.assertEqual(parsedjob['branch'], None)
         self.assertEqual(parsedjob['baserev'], None)
 
@@ -294,7 +290,7 @@ class Try_Jobdir(scheduler.SchedulerMixin, TestReactorMixin, unittest.TestCase):
         jobstr = self.makeNetstring(
             '1', 'extid', '', '', '1', 'this is my diff, -- ++, etc.'
         )
-        parsedjob = sched.parseJob(NativeStringIO(jobstr))
+        parsedjob = sched.parseJob(StringIO(jobstr))
         self.assertEqual(parsedjob['builderNames'], [])
 
     def test_parseJob_v1_no_properties(self):
@@ -303,7 +299,7 @@ class Try_Jobdir(scheduler.SchedulerMixin, TestReactorMixin, unittest.TestCase):
         jobstr = self.makeNetstring(
             '1', 'extid', '', '', '1', 'this is my diff, -- ++, etc.'
         )
-        parsedjob = sched.parseJob(NativeStringIO(jobstr))
+        parsedjob = sched.parseJob(StringIO(jobstr))
         self.assertEqual(parsedjob['properties'], {})
 
     def test_parseJob_v2(self):
@@ -314,7 +310,7 @@ class Try_Jobdir(scheduler.SchedulerMixin, TestReactorMixin, unittest.TestCase):
             'repo', 'proj',
             'buildera', 'builderc'
         )
-        parsedjob = sched.parseJob(NativeStringIO(jobstr))
+        parsedjob = sched.parseJob(StringIO(jobstr))
         self.assertEqual(parsedjob, {
             'baserev': '1234',
             'branch': 'trunk',
@@ -338,7 +334,7 @@ class Try_Jobdir(scheduler.SchedulerMixin, TestReactorMixin, unittest.TestCase):
             'repo', 'proj',
             'buildera', 'builderc'
         )
-        parsedjob = sched.parseJob(NativeStringIO(jobstr))
+        parsedjob = sched.parseJob(StringIO(jobstr))
         self.assertEqual(parsedjob['branch'], None)
         self.assertEqual(parsedjob['baserev'], None)
 
@@ -349,7 +345,7 @@ class Try_Jobdir(scheduler.SchedulerMixin, TestReactorMixin, unittest.TestCase):
             '2', 'extid', 'trunk', '1234', '1', 'this is my diff, -- ++, etc.',
             'repo', 'proj',
         )
-        parsedjob = sched.parseJob(NativeStringIO(jobstr))
+        parsedjob = sched.parseJob(StringIO(jobstr))
         self.assertEqual(parsedjob['builderNames'], [])
 
     def test_parseJob_v2_no_properties(self):
@@ -359,7 +355,7 @@ class Try_Jobdir(scheduler.SchedulerMixin, TestReactorMixin, unittest.TestCase):
             '2', 'extid', 'trunk', '1234', '1', 'this is my diff, -- ++, etc.',
             'repo', 'proj',
         )
-        parsedjob = sched.parseJob(NativeStringIO(jobstr))
+        parsedjob = sched.parseJob(StringIO(jobstr))
         self.assertEqual(parsedjob['properties'], {})
 
     def test_parseJob_v3(self):
@@ -370,7 +366,7 @@ class Try_Jobdir(scheduler.SchedulerMixin, TestReactorMixin, unittest.TestCase):
             'repo', 'proj', 'who',
             'buildera', 'builderc'
         )
-        parsedjob = sched.parseJob(NativeStringIO(jobstr))
+        parsedjob = sched.parseJob(StringIO(jobstr))
         self.assertEqual(parsedjob, {
             'baserev': '1234',
             'branch': 'trunk',
@@ -394,7 +390,7 @@ class Try_Jobdir(scheduler.SchedulerMixin, TestReactorMixin, unittest.TestCase):
             'repo', 'proj', 'who',
             'buildera', 'builderc'
         )
-        parsedjob = sched.parseJob(NativeStringIO(jobstr))
+        parsedjob = sched.parseJob(StringIO(jobstr))
         self.assertEqual(parsedjob['branch'], None)
         self.assertEqual(parsedjob['baserev'], None)
 
@@ -405,7 +401,7 @@ class Try_Jobdir(scheduler.SchedulerMixin, TestReactorMixin, unittest.TestCase):
             '3', 'extid', 'trunk', '1234', '1', 'this is my diff, -- ++, etc.',
             'repo', 'proj', 'who'
         )
-        parsedjob = sched.parseJob(NativeStringIO(jobstr))
+        parsedjob = sched.parseJob(StringIO(jobstr))
         self.assertEqual(parsedjob['builderNames'], [])
 
     def test_parseJob_v3_no_properties(self):
@@ -415,7 +411,7 @@ class Try_Jobdir(scheduler.SchedulerMixin, TestReactorMixin, unittest.TestCase):
             '3', 'extid', 'trunk', '1234', '1', 'this is my diff, -- ++, etc.',
             'repo', 'proj', 'who'
         )
-        parsedjob = sched.parseJob(NativeStringIO(jobstr))
+        parsedjob = sched.parseJob(StringIO(jobstr))
         self.assertEqual(parsedjob['properties'], {})
 
     def test_parseJob_v4(self):
@@ -426,7 +422,7 @@ class Try_Jobdir(scheduler.SchedulerMixin, TestReactorMixin, unittest.TestCase):
             'repo', 'proj', 'who', 'comment',
             'buildera', 'builderc'
         )
-        parsedjob = sched.parseJob(NativeStringIO(jobstr))
+        parsedjob = sched.parseJob(StringIO(jobstr))
         self.assertEqual(parsedjob, {
             'baserev': '1234',
             'branch': 'trunk',
@@ -450,7 +446,7 @@ class Try_Jobdir(scheduler.SchedulerMixin, TestReactorMixin, unittest.TestCase):
             'repo', 'proj', 'who', 'comment',
             'buildera', 'builderc'
         )
-        parsedjob = sched.parseJob(NativeStringIO(jobstr))
+        parsedjob = sched.parseJob(StringIO(jobstr))
         self.assertEqual(parsedjob['branch'], None)
         self.assertEqual(parsedjob['baserev'], None)
 
@@ -461,7 +457,7 @@ class Try_Jobdir(scheduler.SchedulerMixin, TestReactorMixin, unittest.TestCase):
             '4', 'extid', 'trunk', '1234', '1', 'this is my diff, -- ++, etc.',
             'repo', 'proj', 'who', 'comment'
         )
-        parsedjob = sched.parseJob(NativeStringIO(jobstr))
+        parsedjob = sched.parseJob(StringIO(jobstr))
         self.assertEqual(parsedjob['builderNames'], [])
 
     def test_parseJob_v4_no_properties(self):
@@ -471,7 +467,7 @@ class Try_Jobdir(scheduler.SchedulerMixin, TestReactorMixin, unittest.TestCase):
             '4', 'extid', 'trunk', '1234', '1', 'this is my diff, -- ++, etc.',
             'repo', 'proj', 'who', 'comment'
         )
-        parsedjob = sched.parseJob(NativeStringIO(jobstr))
+        parsedjob = sched.parseJob(StringIO(jobstr))
         self.assertEqual(parsedjob['properties'], {})
 
     def test_parseJob_v5(self):
@@ -486,7 +482,7 @@ class Try_Jobdir(scheduler.SchedulerMixin, TestReactorMixin, unittest.TestCase):
                 'comment': 'comment', 'builderNames': ['buildera', 'builderc'],
                 'properties': {'foo': 'bar'},
             }))
-        parsedjob = sched.parseJob(NativeStringIO(jobstr))
+        parsedjob = sched.parseJob(StringIO(jobstr))
         self.assertEqual(parsedjob, {
             'baserev': '1234',
             'branch': 'trunk',
@@ -510,7 +506,7 @@ class Try_Jobdir(scheduler.SchedulerMixin, TestReactorMixin, unittest.TestCase):
             'repo', 'proj', 'who', 'comment',
             'buildera', 'builderc'
         )
-        parsedjob = sched.parseJob(NativeStringIO(jobstr))
+        parsedjob = sched.parseJob(StringIO(jobstr))
         self.assertEqual(parsedjob['branch'], None)
         self.assertEqual(parsedjob['baserev'], None)
 
@@ -526,7 +522,7 @@ class Try_Jobdir(scheduler.SchedulerMixin, TestReactorMixin, unittest.TestCase):
                 'comment': 'comment', 'builderNames': [],
                 'properties': {'foo': 'bar'},
             }))
-        parsedjob = sched.parseJob(NativeStringIO(jobstr))
+        parsedjob = sched.parseJob(StringIO(jobstr))
         self.assertEqual(parsedjob['builderNames'], [])
 
     def test_parseJob_v5_no_properties(self):
@@ -541,7 +537,7 @@ class Try_Jobdir(scheduler.SchedulerMixin, TestReactorMixin, unittest.TestCase):
                 'comment': 'comment', 'builderNames': ['buildera', 'builderb'],
                 'properties': {},
             }))
-        parsedjob = sched.parseJob(NativeStringIO(jobstr))
+        parsedjob = sched.parseJob(StringIO(jobstr))
         self.assertEqual(parsedjob['properties'], {})
 
     def test_parseJob_v5_invalid_json(self):
@@ -549,7 +545,7 @@ class Try_Jobdir(scheduler.SchedulerMixin, TestReactorMixin, unittest.TestCase):
             name='tsched', builderNames=['buildera', 'builderb'], jobdir='foo')
         jobstr = self.makeNetstring('5', '{"comment": "com}')
         with self.assertRaises(trysched.BadJobfile):
-            sched.parseJob(NativeStringIO(jobstr))
+            sched.parseJob(StringIO(jobstr))
 
     # handleJobFile
 
@@ -695,14 +691,10 @@ class Try_Userpass_Perspective(scheduler.SchedulerMixin, TestReactorMixin,
         self.tearDownScheduler()
 
     def makeScheduler(self, **kwargs):
-        sched = self.attachScheduler(trysched.Try_Userpass(**kwargs),
-                                     self.OBJECTID, self.SCHEDULERID,
-                                     overrideBuildsetMethods=True,
-                                     createBuilderDB=True)
-        # Try will return a remote version of master.status, so give it
-        # something to return
-        sched.master.status = mock.Mock()
-        return sched
+        return self.attachScheduler(trysched.Try_Userpass(**kwargs),
+                                    self.OBJECTID, self.SCHEDULERID,
+                                    overrideBuildsetMethods=True,
+                                    createBuilderDB=True)
 
     @defer.inlineCallbacks
     def call_perspective_try(self, *args, **kwargs):

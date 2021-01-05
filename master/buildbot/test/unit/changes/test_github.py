@@ -143,6 +143,12 @@ gitJsonPayloadCommitters = """
 ]
 """
 
+git_json_not_found = """
+{
+  "message": "Not Found",
+  "documentation_url": "https://docs.github.com/rest/reference/pulls#list-pull-requests"
+}
+"""
 
 _CT_ENCODED = b'application/x-www-form-urlencoded'
 _CT_JSON = b'application/json'
@@ -188,7 +194,7 @@ class TestGitHubPullrequestPoller(changesource.ChangeSourceMixin,
         token = kwargs.get('token', None)
         if token:
             http_headers.update({'Authorization': 'token ' + token})
-        self._http = yield fakehttpclientservice.HTTPClientService.getFakeService(
+        self._http = yield fakehttpclientservice.HTTPClientService.getService(
             self.master, self, endpoint, headers=http_headers)
         self.changesource = GitHubPullrequestPoller(owner, repo, **kwargs)
 
@@ -280,6 +286,15 @@ class TestGitHubPullrequestPoller(changesource.ChangeSourceMixin,
             ep='/repos/defunkt/defunkt/pulls',
             content_json=json.loads(gitJsonPayloadPullRequests))
 
+        yield self.startChangeSource()
+        yield self.changesource.poll()
+        self.assertEqual(len(self.master.data.updates.changesAdded), 0)
+
+    @defer.inlineCallbacks
+    def test_http_error(self):
+        yield self.newChangeSource('defunkt', 'defunkt', token='1234')
+        self._http.expect(method='get', ep='/repos/defunkt/defunkt/pulls',
+                          content_json=json.loads(git_json_not_found), code=404)
         yield self.startChangeSource()
         yield self.changesource.poll()
         self.assertEqual(len(self.master.data.updates.changesAdded), 0)

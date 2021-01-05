@@ -629,6 +629,7 @@ prepend
 prepended
 prepending
 prev
+PrivateTemporaryDirectory
 procmail
 prois
 propertiesDict
@@ -700,6 +701,7 @@ revlink
 revlinks
 rmdir
 rmfile
+rmtree
 Robocopy
 rootlink
 routingkeys
@@ -725,6 +727,7 @@ secretsmount
 sed
 selectable
 sendchange
+sendMessage
 serializable
 serviceid
 setDefaultWorkdir
@@ -776,6 +779,7 @@ stepdicts
 stepid
 stopService
 storages
+strports
 subclassed
 subclasses
 subclassing
@@ -817,6 +821,7 @@ tac
 tarball
 tarballs
 Tarballs
+tcp
 templateCache
 templating
 testability
@@ -829,6 +834,8 @@ th
 timestamp
 Todo
 tokenUri
+tooltip
+topbar
 topicmatch
 trac
 tracebacks

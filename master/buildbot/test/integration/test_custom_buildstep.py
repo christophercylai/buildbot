@@ -14,11 +14,11 @@
 # Copyright Buildbot Team Members
 
 import traceback
+from io import StringIO
 
 from twisted.internet import defer
 from twisted.internet import error
 from twisted.python import failure
-from twisted.python.compat import NativeStringIO
 
 from buildbot.config import BuilderConfig
 from buildbot.process import buildstep
@@ -27,6 +27,8 @@ from buildbot.process import results
 from buildbot.process.factory import BuildFactory
 from buildbot.steps import shell
 from buildbot.test.util.integration import RunFakeMasterTestCase
+from buildbot.test.util.warnings import assertProducesWarnings
+from buildbot.warnings import DeprecatedApiWarning
 
 
 class TestLogObserver(buildstep.LogObserver):
@@ -134,7 +136,7 @@ class OldBuildEPYDoc(shell.ShellCommand):
         return defer.succeed(None)
 
     def createSummary(self, log):
-        for line in NativeStringIO(log.getText()):
+        for line in StringIO(log.getText()):
             # what we do with the line isn't important to the test
             assert line in ('some\n', 'output\n')
 
@@ -178,7 +180,7 @@ class RunSteps(RunFakeMasterTestCase):
             'multiMaster': True,
         }
 
-        yield self.getMaster(config_dict)
+        yield self.setup_master(config_dict)
         builder_id = yield self.master.data.updates.findBuilderId('builder')
         return builder_id
 
@@ -194,7 +196,7 @@ class RunSteps(RunFakeMasterTestCase):
         consumer = yield self.master.mq.startConsuming(on_finished, ('builds', None, 'finished'))
 
         # start the builder
-        yield self.createBuildrequest(self.master, [builder_id])
+        yield self.create_build_request([builder_id])
 
         # and wait for build completion
         yield d_finished
@@ -310,17 +312,21 @@ class RunSteps(RunFakeMasterTestCase):
     @defer.inlineCallbacks
     def test_OldBuildEPYDoc(self):
         # test old-style calls to log.getText, figuring readlines will be ok
-        step = OldBuildEPYDoc()
-        builder_id = yield self.create_config_for_step(step)
+        with assertProducesWarnings(DeprecatedApiWarning, num_warnings=2,
+                                    message_pattern='Subclassing old-style step'):
+            step = OldBuildEPYDoc()
+            builder_id = yield self.create_config_for_step(step)
 
-        yield self.do_test_build(builder_id)
-        yield self.assertBuildResults(1, results.FAILURE)
+            yield self.do_test_build(builder_id)
+            yield self.assertBuildResults(1, results.FAILURE)
 
     @defer.inlineCallbacks
     def test_OldPerlModuleTest(self):
         # test old-style calls to self.getLog
-        step = OldPerlModuleTest()
-        builder_id = yield self.create_config_for_step(step)
+        with assertProducesWarnings(DeprecatedApiWarning, num_warnings=2,
+                                    message_pattern='Subclassing old-style step'):
+            step = OldPerlModuleTest()
+            builder_id = yield self.create_config_for_step(step)
 
-        yield self.do_test_build(builder_id)
-        yield self.assertBuildResults(1, results.SUCCESS)
+            yield self.do_test_build(builder_id)
+            yield self.assertBuildResults(1, results.SUCCESS)

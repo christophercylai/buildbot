@@ -21,7 +21,7 @@ from twisted.python import log
 
 from buildbot import config
 from buildbot import interfaces
-from buildbot.interfaces import WorkerTooOldError
+from buildbot.interfaces import WorkerSetupError
 from buildbot.process import buildstep
 from buildbot.process import results
 from buildbot.process.properties import Interpolate
@@ -37,8 +37,6 @@ from buildbot.steps.source import Source
 #   formatted as marshalled Python dictionary objects. This is most often used
 #   when scripting.
 
-debug_logging = False
-
 
 class P4(Source):
 
@@ -46,7 +44,7 @@ class P4(Source):
 
     name = 'p4'
 
-    renderables = ['mode', 'p4base', 'p4client', 'p4viewspec', 'p4branch']
+    renderables = ['mode', 'p4base', 'p4client', 'p4viewspec', 'p4branch', 'p4passwd']
     possible_modes = ('incremental', 'full')
 
     def __init__(self, mode='incremental',
@@ -61,6 +59,7 @@ class P4(Source):
                  p4bin='p4',
                  use_tickets=False,
                  stream=False,
+                 debug=False,
                  **kwargs):
         self.method = method
         self.mode = mode
@@ -79,6 +78,7 @@ class P4(Source):
         self.p4extra_args = p4extra_args
         self.use_tickets = use_tickets
         self.stream = stream
+        self.debug = debug
 
         super().__init__(**kwargs)
 
@@ -92,7 +92,7 @@ class P4(Source):
 
         if p4viewspec and (p4base or p4branch or p4extra_views):
             config.error(
-                "Either provide p4viewspec or p4base and p4branch (and optionally p4extra_views")
+                "Either provide p4viewspec or p4base and p4branch (and optionally p4extra_views)")
 
         if p4viewspec and isinstance(p4viewspec, str):
             config.error(
@@ -108,24 +108,22 @@ class P4(Source):
             config.error('p4branch should not end with a trailing / [p4branch = {}]'.format(
                     p4branch))
 
-        if (p4branch or p4extra_views) and not p4base:
-            config.error(
-                'If you specify either p4branch or p4extra_views you must also specify p4base')
-
         if stream:
             if (p4extra_views or p4viewspec):
                 config.error('You can\'t use p4extra_views not p4viewspec with stream')
             if not p4base or not p4branch:
                 config.error('You must specify both p4base and p4branch when using stream')
-            if " " in p4base or " " in p4branch:
-                config.error('p4base and p4branch must not contain any whitespace')
+            if not interfaces.IRenderable.providedBy(p4base) and " " in p4base:
+                config.error('p4base must not contain any whitespace')
+            if not interfaces.IRenderable.providedBy(p4branch) and " " in p4branch:
+                config.error('p4branch must not contain any whitespace')
 
         if self.p4client_spec_options is None:
             self.p4client_spec_options = ''
 
     @defer.inlineCallbacks
     def run_vc(self, branch, revision, patch):
-        if debug_logging:
+        if self.debug:
             log.msg('in run_vc')
 
         self.revision = revision
@@ -134,7 +132,7 @@ class P4(Source):
 
         installed = yield self.checkP4()
         if not installed:
-            raise WorkerTooOldError("p4 is not installed on worker")
+            raise WorkerSetupError("p4 is not installed on worker")
 
         # Try to obfuscate the password when used as an argument to commands.
         if self.p4passwd is not None:
@@ -154,7 +152,7 @@ class P4(Source):
 
     @defer.inlineCallbacks
     def mode_full(self):
-        if debug_logging:
+        if self.debug:
             log.msg("P4:full()..")
 
         # First we need to create the client
@@ -168,23 +166,23 @@ class P4(Source):
 
         # Then we need to sync the client
         if self.revision:
-            if debug_logging:
+            if self.debug:
                 log.msg("P4: full() sync command based on :base:%s changeset:%d",
                         self._getP4BaseForLog(), int(self.revision))
             yield self._dovccmd(['sync', '{}...@{}'.format(self._getP4BaseForCommand(),
                                                            int(self.revision))], collectStdout=True)
         else:
-            if debug_logging:
+            if self.debug:
                 log.msg("P4: full() sync command based on :base:%s no revision",
                         self._getP4BaseForLog())
             yield self._dovccmd(['sync'], collectStdout=True)
 
-        if debug_logging:
+        if self.debug:
             log.msg("P4: full() sync done.")
 
     @defer.inlineCallbacks
     def mode_incremental(self):
-        if debug_logging:
+        if self.debug:
             log.msg("P4:incremental()")
 
         # First we need to create the client
@@ -196,7 +194,7 @@ class P4(Source):
         if self.revision:
             command.extend(['{}...@{}'.format(self._getP4BaseForCommand(), int(self.revision))])
 
-        if debug_logging:
+        if self.debug:
             log.msg(
                 "P4:incremental() command:%s revision:%s", command, self.revision)
         yield self._dovccmd(command)
@@ -232,7 +230,7 @@ class P4(Source):
     def _dovccmd(self, command, collectStdout=False, initialStdin=None):
         command = self._buildVCCommand(command)
 
-        if debug_logging:
+        if self.debug:
             log.msg("P4:_dovccmd():workdir->{}".format(self.workdir))
 
         cmd = buildstep.RemoteShellCommand(self.workdir, command,
@@ -242,13 +240,13 @@ class P4(Source):
                                            collectStdout=collectStdout,
                                            initialStdin=initialStdin,)
         cmd.useLog(self.stdio_log, False)
-        if debug_logging:
+        if self.debug:
             log.msg("Starting p4 command : p4 {}".format(" ".join(command)))
 
         yield self.runCommand(cmd)
 
         if cmd.rc != 0:
-            if debug_logging:
+            if self.debug:
                 log.msg("P4:_dovccmd():Source step failed while running command {}".format(cmd))
             raise buildstep.BuildStepFailed()
         if collectStdout:
@@ -264,19 +262,11 @@ class P4(Source):
             return 'fresh'
         return None
 
-    def _sourcedirIsUpdatable(self):
-        # In general you should always be able to write to the directory
-        # You just specified as the root of your client
-        # So just return.
-        # If we find a case where this is no longer true, then this
-        # needs to be implemented
-        return defer.succeed(True)
-
     @defer.inlineCallbacks
     def _createClientSpec(self):
         builddir = self.getProperty('builddir')
 
-        if debug_logging:
+        if self.debug:
             log.msg("P4:_createClientSpec() builddir:{}".format(builddir))
             log.msg("P4:_createClientSpec() SELF.workdir:{}".format(self.workdir))
 
@@ -311,7 +301,7 @@ class P4(Source):
                 # Ignore any specified p4base,p4branch, and/or p4extra_views
                 suffix = self.p4viewspec_suffix or ''
                 for k, v in self.p4viewspec:
-                    if debug_logging:
+                    if self.debug:
                         log.msg('P4:_createClientSpec():key:{} value:{}'.format(k, v))
 
                     qa = '"' if has_whitespace(k, suffix) else ''
@@ -341,7 +331,7 @@ class P4(Source):
                         client_spec += "\t{}{}/...{} {}//{}/{}/...{}\n".format(qa, k, qa, qb,
                                                                                self.p4client, v, qb)
 
-        if debug_logging:
+        if self.debug:
             log.msg(client_spec)
 
         stdout = yield self._dovccmd(['client', '-i'], collectStdout=True, initialStdin=client_spec)
@@ -350,7 +340,7 @@ class P4(Source):
 
     @defer.inlineCallbacks
     def _acquireTicket(self):
-        if debug_logging:
+        if self.debug:
             log.msg("P4:acquireTicket()")
 
         # TODO: check first if the ticket is still valid?
@@ -376,13 +366,13 @@ class P4(Source):
         revision = stdout.split()[1]
         try:
             int(revision)
-        except ValueError:
+        except ValueError as e:
             msg = (("p4.parseGotRevision unable to parse output "
                     "of 'p4 changes -m1 \"#have\"': '{}'").format(stdout))
             log.msg(msg)
-            raise buildstep.BuildStepFailed()
+            raise buildstep.BuildStepFailed() from e
 
-        if debug_logging:
+        if self.debug:
             log.msg("Got p4 revision {}".format(revision))
         self.updateSourceProperty('got_revision', revision)
 
@@ -399,7 +389,7 @@ class P4(Source):
 
     @defer.inlineCallbacks
     def checkP4(self):
-        cmd = buildstep.RemoteShellCommand(self.workdir, ['p4', '-V'],
+        cmd = buildstep.RemoteShellCommand(self.workdir, [self.p4bin, '-V'],
                                            env=self.env,
                                            logEnviron=self.logEnviron)
         cmd.useLog(self.stdio_log, False)

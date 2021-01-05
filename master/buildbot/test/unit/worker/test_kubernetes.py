@@ -17,6 +17,8 @@ from twisted.internet import defer
 from twisted.trial import unittest
 
 from buildbot.interfaces import LatentWorkerFailedToSubstantiate
+from buildbot.process.properties import Interpolate
+from buildbot.process.properties import Properties
 from buildbot.test.fake import fakemaster
 from buildbot.test.fake.fakebuild import FakeBuildForRendering as FakeBuild
 from buildbot.test.fake.fakeprotocol import FakeTrivialConnection as FakeBot
@@ -47,7 +49,7 @@ class TestKubernetesWorker(TestReactorMixin, unittest.TestCase):
         self.worker = worker = kubernetes.KubeLatentWorker(
             *args, kube_config=config, **kwargs)
         master = fakemaster.make_master(self, wantData=True)
-        self._kube = yield KubeClientService.getFakeService(master, self, kube_config=config)
+        self._kube = yield KubeClientService.getService(master, self, kube_config=config)
         worker.setServiceParent(master)
         yield master.startService()
         self.assertTrue(config.running)
@@ -71,6 +73,12 @@ class TestKubernetesWorker(TestReactorMixin, unittest.TestCase):
 
     def test_service_arg(self):
         return self.setupWorker('worker')
+
+    @defer.inlineCallbacks
+    def test_builds_may_be_incompatible(self):
+        yield self.setupWorker('worker')
+        # http is lazily created on worker substantiation
+        self.assertEqual(self.worker.builds_may_be_incompatible, True)
 
     @defer.inlineCallbacks
     def test_start_service(self):
@@ -108,3 +116,22 @@ class TestKubernetesWorker(TestReactorMixin, unittest.TestCase):
         with self.assertRaises(LatentWorkerFailedToSubstantiate):
             yield worker.substantiate(None, FakeBuild())
         self.assertEqual(worker.instance, None)
+
+    @defer.inlineCallbacks
+    def test_interpolate_renderables_for_new_build(self):
+        build1 = Properties(img_prop="image1")
+        build2 = Properties(img_prop="image2")
+        worker = yield self.setupWorker('worker', image=Interpolate("%(prop:img_prop)s"))
+
+        yield worker.start_instance(build1)
+        yield worker.stop_instance()
+        self.assertTrue((yield worker.isCompatibleWithBuild(build2)))
+
+    @defer.inlineCallbacks
+    def test_reject_incompatible_build_while_running(self):
+        build1 = Properties(img_prop="image1")
+        build2 = Properties(img_prop="image2")
+        worker = yield self.setupWorker('worker', image=Interpolate("%(prop:img_prop)s"))
+
+        yield worker.start_instance(build1)
+        self.assertFalse((yield worker.isCompatibleWithBuild(build2)))

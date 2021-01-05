@@ -22,8 +22,7 @@ from buildbot.process.results import EXCEPTION
 from buildbot.process.results import FAILURE
 from buildbot.process.results import SUCCESS
 from buildbot.process.results import WARNINGS
-from buildbot.process.results import Results
-from buildbot.reporters.message import MessageFormatter as DefaultMessageFormatter
+from buildbot.process.results import statusToString
 
 
 class BuildStatusGeneratorMixin(util.ComparableMixin):
@@ -32,10 +31,9 @@ class BuildStatusGeneratorMixin(util.ComparableMixin):
                       "cancelled")
 
     compare_attrs = ['mode', 'tags', 'builders', 'schedulers', 'branches', 'subject', 'add_logs',
-                     'add_patch', 'formatter']
+                     'add_patch']
 
-    def __init__(self, mode, tags, builders, schedulers, branches, subject, add_logs, add_patch,
-                 message_formatter):
+    def __init__(self, mode, tags, builders, schedulers, branches, subject, add_logs, add_patch):
         self.mode = self._compute_shortcut_modes(mode)
 
         self.tags = tags
@@ -45,15 +43,21 @@ class BuildStatusGeneratorMixin(util.ComparableMixin):
         self.subject = subject
         self.add_logs = add_logs
         self.add_patch = add_patch
-        self.formatter = message_formatter
-        if self.formatter is None:
-            self.formatter = DefaultMessageFormatter()
 
     def check(self):
         self._verify_build_generator_mode(self.mode)
 
-        if '\n' in self.subject:
+        if self.subject is not None and '\n' in self.subject:
             config.error('Newlines are not allowed in message subjects')
+
+        list_or_none_params = [
+            ('tags', self.tags),
+            ('builders', self.builders),
+            ('schedulers', self.schedulers),
+            ('branches', self.branches),
+        ]
+        for name, param in list_or_none_params:
+            self._verify_list_or_none_param(name, param)
 
         # you should either limit on builders or tags, not both
         if self.builders is not None and self.tags is not None:
@@ -85,22 +89,24 @@ class BuildStatusGeneratorMixin(util.ComparableMixin):
 
         return False
 
-    def is_message_needed(self, build):
+    def is_message_needed_by_props(self, build):
         # here is where we actually do something.
         builder = build['builder']
         scheduler = build['properties'].get('scheduler', [None])[0]
         branch = build['properties'].get('branch', [None])[0]
-        results = build['results']
 
         if self.builders is not None and builder['name'] not in self.builders:
-            return False  # ignore this build
+            return False
         if self.schedulers is not None and scheduler not in self.schedulers:
-            return False  # ignore this build
+            return False
         if self.branches is not None and branch not in self.branches:
-            return False  # ignore this build
+            return False
         if self.tags is not None and not self._matches_any_tag(builder['tags']):
-            return False  # ignore this build
+            return False
+        return True
 
+    def is_message_needed_by_results(self, build):
+        results = build['results']
         if "change" in self.mode:
             prev = build['prev_build']
             if prev and prev['results'] != results:
@@ -123,10 +129,11 @@ class BuildStatusGeneratorMixin(util.ComparableMixin):
         return False
 
     @defer.inlineCallbacks
-    def build_message(self, master, reporter, name, builds, results):
+    def build_message(self, formatter, master, reporter, name, builds, results):
+        # The given builds must refer to builds from a single buildset
         patches = []
         logs = []
-        body = ""
+        body = None
         subject = None
         msgtype = None
         users = set()
@@ -144,21 +151,22 @@ class BuildStatusGeneratorMixin(util.ComparableMixin):
                     build_logs = [log for log in build_logs if self._should_attach_log(log)]
                 logs.extend(build_logs)
 
-            if 'prev_build' in build and build['prev_build'] is not None:
-                previous_results = build['prev_build']['results']
-            else:
-                previous_results = None
             blamelist = yield reporter.getResponsibleUsersForBuild(master, build['buildid'])
-            buildmsg = yield self.formatter.formatMessageForBuildResults(
-                self.mode, name, build['buildset'], build, master, previous_results, blamelist)
+            buildmsg = yield formatter.format_message_for_build(self.mode, name, build,
+                                                                master, blamelist)
             users.update(set(blamelist))
             msgtype = buildmsg['type']
-            body += buildmsg['body']
-            if 'subject' in buildmsg:
+
+            if body is None:
+                body = buildmsg['body']
+            elif buildmsg['body'] is not None:
+                body = body + buildmsg['body']
+
+            if buildmsg['subject'] is not None:
                 subject = buildmsg['subject']
 
-        if subject is None:
-            subject = self.subject % {'result': Results[results],
+        if subject is None and self.subject is not None:
+            subject = self.subject % {'result': statusToString(results),
                                       'projectName': master.config.title,
                                       'title': master.config.title,
                                       'builder': name}
@@ -195,6 +203,10 @@ class BuildStatusGeneratorMixin(util.ComparableMixin):
                                  "passed in as a separate string")
                 else:
                     config.error("mode {} is not a valid mode".format(m))
+
+    def _verify_list_or_none_param(self, name, param):
+        if param is not None and not isinstance(param, list):
+            config.error("{} must be a list or None".format(name))
 
     def _compute_shortcut_modes(self, mode):
         if isinstance(mode, str):

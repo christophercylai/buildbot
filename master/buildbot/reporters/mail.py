@@ -33,8 +33,10 @@ from buildbot import config
 from buildbot import interfaces
 from buildbot import util
 from buildbot.process.properties import Properties
-from buildbot.reporters.notifier import ENCODING
-from buildbot.reporters.notifier import NotifierBase
+from buildbot.reporters.base import ENCODING
+from buildbot.reporters.base import ReporterBase
+from buildbot.reporters.generators.build import BuildStatusGenerator
+from buildbot.reporters.generators.worker import WorkerMissingGenerator
 from buildbot.util import ssl
 from buildbot.util import unicode2bytes
 
@@ -83,32 +85,21 @@ class Domain(util.ComparableMixin):
 
 
 @implementer(interfaces.IEmailSender)
-class MailNotifier(NotifierBase):
+class MailNotifier(ReporterBase):
     secrets = ["smtpUser", "smtpPassword"]
 
-    def checkConfig(self, fromaddr, mode=("failing", "passing", "warnings"),
-                    tags=None, builders=None, addLogs=False,
-                    relayhost="localhost", buildSetSummary=False,
-                    subject="Buildbot %(result)s in %(title)s on %(builder)s",
-                    lookup=None, extraRecipients=None,
-                    sendToInterestedUsers=True,
-                    messageFormatter=None, extraHeaders=None,
-                    addPatch=True, useTls=False, useSmtps=False,
+    def checkConfig(self, fromaddr, relayhost="localhost", lookup=None, extraRecipients=None,
+                    sendToInterestedUsers=True, extraHeaders=None, useTls=False, useSmtps=False,
                     smtpUser=None, smtpPassword=None, smtpPort=25,
-                    schedulers=None, branches=None,
-                    watchedWorkers='all', messageFormatterMissingWorker=None,
-                    dumpMailsToLog=False):
+                    dumpMailsToLog=False, generators=None):
         if ESMTPSenderFactory is None:
             config.error("twisted-mail is not installed - cannot "
                          "send mail")
 
-        super(MailNotifier, self).checkConfig(
-            mode=mode, tags=tags, builders=builders,
-            buildSetSummary=buildSetSummary, messageFormatter=messageFormatter,
-            subject=subject, addLogs=addLogs, addPatch=addPatch,
-            schedulers=schedulers, branches=branches,
-            watchedWorkers=watchedWorkers,
-            messageFormatterMissingWorker=messageFormatterMissingWorker)
+        if generators is None:
+            generators = self._create_default_generators()
+
+        super().checkConfig(generators=generators)
 
         if extraRecipients is None:
             extraRecipients = []
@@ -133,25 +124,16 @@ class MailNotifier(NotifierBase):
             ssl.ensureHasSSL(self.__class__.__name__)
 
     @defer.inlineCallbacks
-    def reconfigService(self, fromaddr, mode=("failing", "passing", "warnings"),
-                        tags=None, builders=None, addLogs=False,
-                        relayhost="localhost", buildSetSummary=False,
-                        subject="Buildbot %(result)s in %(title)s on %(builder)s",
-                        lookup=None, extraRecipients=None,
-                        sendToInterestedUsers=True,
-                        messageFormatter=None, extraHeaders=None,
-                        addPatch=True, useTls=False, useSmtps=False,
+    def reconfigService(self, fromaddr, relayhost="localhost", lookup=None, extraRecipients=None,
+                        sendToInterestedUsers=True, extraHeaders=None, useTls=False, useSmtps=False,
                         smtpUser=None, smtpPassword=None, smtpPort=25,
-                        schedulers=None, branches=None,
-                        watchedWorkers='all', messageFormatterMissingWorker=None,
-                        dumpMailsToLog=False):
-        yield super().reconfigService(
-            mode=mode, tags=tags, builders=builders,
-            buildSetSummary=buildSetSummary, messageFormatter=messageFormatter,
-            subject=subject, addLogs=addLogs, addPatch=addPatch,
-            schedulers=schedulers, branches=branches,
-            watchedWorkers=watchedWorkers,
-            messageFormatterMissingWorker=messageFormatterMissingWorker)
+                        dumpMailsToLog=False, generators=None):
+
+        if generators is None:
+            generators = self._create_default_generators()
+
+        yield super().reconfigService(generators=generators)
+
         if extraRecipients is None:
             extraRecipients = []
         self.extraRecipients = extraRecipients
@@ -169,6 +151,12 @@ class MailNotifier(NotifierBase):
         self.smtpPassword = smtpPassword
         self.smtpPort = smtpPort
         self.dumpMailsToLog = dumpMailsToLog
+
+    def _create_default_generators(self):
+        return [
+            BuildStatusGenerator(add_patch=True),
+            WorkerMissingGenerator(workers='all'),
+        ]
 
     def patch_to_attachment(self, patch, index):
         # patches are specifically converted to unicode before entering the db

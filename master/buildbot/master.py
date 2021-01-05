@@ -43,7 +43,6 @@ from buildbot.process.botmaster import BotMaster
 from buildbot.process.users.manager import UserManagerManager
 from buildbot.schedulers.manager import SchedulerManager
 from buildbot.secrets.manager import SecretManager
-from buildbot.status.master import Status
 from buildbot.util import check_functional_environment
 from buildbot.util import service
 from buildbot.util.eventual import eventually
@@ -180,9 +179,6 @@ class BuildMaster(service.ReconfigurableServiceMixin, service.MasterService):
         self.debug = debug.DebugServices()
         yield self.debug.setServiceParent(self)
 
-        self.status = Status()
-        yield self.status.setServiceParent(self)
-
         self.secrets_manager = SecretManager()
         yield self.secrets_manager.setServiceParent(self)
         self.secrets_manager.reconfig_priority = 2000
@@ -268,11 +264,13 @@ class BuildMaster(service.ReconfigurableServiceMixin, service.MasterService):
 
             yield self.mq.setup()
 
+            # the buildbot scripts send the SIGHUP signal to reconfig master
             if hasattr(signal, "SIGHUP"):
                 def sighup(*args):
                     eventually(self.reconfig)
                 signal.signal(signal.SIGHUP, sighup)
 
+            # the buildbot scripts send the SIGUSR1 signal to stop master
             if hasattr(signal, "SIGUSR1"):
                 def sigusr1(*args):
                     eventually(self.botmaster.cleanShutdown)
@@ -439,12 +437,6 @@ class BuildMaster(service.ReconfigurableServiceMixin, service.MasterService):
     # informational methods
     def allSchedulers(self):
         return list(self.scheduler_manager)
-
-    def getStatus(self):
-        """
-        @rtype: L{buildbot.status.builder.Status}
-        """
-        return self.status
 
     # state maintenance (private)
     def getObjectId(self):

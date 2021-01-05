@@ -18,7 +18,8 @@ from urllib.parse import urlparse
 from twisted.internet import defer
 
 from buildbot.process.results import SUCCESS
-from buildbot.reporters import http
+from buildbot.reporters.base import ReporterBase
+from buildbot.reporters.generators.build import BuildStartEndStatusGenerator
 from buildbot.util import httpclientservice
 from buildbot.util.logger import Logger
 
@@ -36,16 +37,30 @@ _GET_TOKEN_DATA = {
 }
 
 
-class BitbucketStatusPush(http.HttpStatusPushBase):
+class BitbucketStatusPush(ReporterBase):
     name = "BitbucketStatusPush"
 
+    def checkConfig(self, oauth_key, oauth_secret, base_url=_BASE_URL, oauth_url=_OAUTH_URL,
+                    debug=None, verify=None, generators=None,
+                    **kwargs):
+
+        if generators is None:
+            generators = self._create_default_generators()
+
+        super().checkConfig(generators=generators, **kwargs)
+        httpclientservice.HTTPClientService.checkAvailable(self.__class__.__name__)
+
     @defer.inlineCallbacks
-    def reconfigService(self, oauth_key, oauth_secret,
-                        base_url=_BASE_URL,
-                        oauth_url=_OAUTH_URL,
-                        **kwargs):
+    def reconfigService(self, oauth_key, oauth_secret, base_url=_BASE_URL, oauth_url=_OAUTH_URL,
+                        debug=None, verify=None, generators=None, **kwargs):
         oauth_key, oauth_secret = yield self.renderSecrets(oauth_key, oauth_secret)
-        yield super().reconfigService(**kwargs)
+        self.debug = debug
+        self.verify = verify
+
+        if generators is None:
+            generators = self._create_default_generators()
+
+        yield super().reconfigService(generators=generators, **kwargs)
 
         if base_url.endswith('/'):
             base_url = base_url[:-1]
@@ -58,8 +73,12 @@ class BitbucketStatusPush(http.HttpStatusPushBase):
             self.master, oauth_url, auth=(oauth_key, oauth_secret),
             debug=self.debug, verify=self.verify)
 
+    def _create_default_generators(self):
+        return [BuildStartEndStatusGenerator()]
+
     @defer.inlineCallbacks
-    def send(self, build):
+    def sendMessage(self, reports):
+        build = reports[0]['builds'][0]
         results = build['results']
         oauth_request = yield self.oauthhttp.post("",
                                                   data=_GET_TOKEN_DATA)

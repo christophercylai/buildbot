@@ -11,6 +11,13 @@
 HTTP Requests
 +++++++++++++
 
+.. note::
+
+    The HTTP steps are being migrated to :ref:`new-style<New-Style-Build-Steps>`.
+    A new-style equivalents are provided as ``HTTPStepNewStyle``, ``GETNewStyle``, ``PUTNewStyle``, ``POSTNewStyle``, ``DELETENewStyle``, ``HEADNewStyle``, ``OPTIONSNewStyle``.
+    This should be inherited by any custom steps until :ref:`Buildbot 3.0 is released<3.0_Upgrading>`.
+    Regular uses without inheritance are not affected.
+
 Using the :bb:step:`HTTPStep` step, it is possible to perform HTTP requests in order to trigger another REST service about the progress of the build.
 
 .. note::
@@ -34,6 +41,14 @@ The parameters are the following:
 
 ``headers``
     Dictionary of headers to send.
+
+``hide_request_headers``
+   Iterable of request headers to be hidden from the log.
+   The header will be listed in the log but the value will be shown as ``<HIDDEN>``.
+
+``hide_response_headers``
+   Iterable of response headers to be hidden from the log.
+   The header will be listed in the log but the value will be shown as ``<HIDDEN>``.
 
 ``other params``
     Any other keywords supported by the ``requests``

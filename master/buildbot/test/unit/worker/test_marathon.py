@@ -54,13 +54,19 @@ class TestMarathonLatentWorker(unittest.TestCase, TestReactorMixin):
         worker = MarathonLatentWorker('bot', 'tcp://marathon.local', **kwargs)
         self.worker = worker
         master = fakemaster.make_master(self, wantData=True)
-        self._http = yield fakehttpclientservice.HTTPClientService.getFakeService(
+        self._http = yield fakehttpclientservice.HTTPClientService.getService(
                 master, self, 'tcp://marathon.local', auth=kwargs.get('auth'))
         yield worker.setServiceParent(master)
         worker.reactor = self.reactor
         yield master.startService()
         worker.masterhash = "masterhash"
         return worker
+
+    @defer.inlineCallbacks
+    def test_builds_may_be_incompatible(self):
+        worker = self.worker = yield self.makeWorker()
+        # http is lazily created on worker substantiation
+        self.assertEqual(worker.builds_may_be_incompatible, True)
 
     @defer.inlineCallbacks
     def test_start_service(self):

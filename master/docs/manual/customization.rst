@@ -564,7 +564,7 @@ Writing a Change Poller
 ~~~~~~~~~~~~~~~~~~~~~~~
 
 Polling is a very common means of seeking changes, so Buildbot supplies a utility parent class to make it easier.
-A poller should subclass :class:`buildbot.changes.base.PollingChangeSource`, which is a subclass of :class:`~buildbot.changes.base.ChangeSource`.
+A poller should subclass :class:`buildbot.changes.base.ReconfigurablePollingChangeSource`, which is a subclass of :class:`~buildbot.changes.base.ChangeSource`.
 This subclass implements the :meth:`Service` methods, and calls the :meth:`poll` method according to the ``pollInterval`` and ``pollAtLaunch`` options.
 The ``poll`` method should return a Deferred to signal its completion.
 
@@ -794,7 +794,7 @@ The :py:class:`~buildbot.process.buildstep.CommandMixin` class offers a simple i
 For the much more common task of running a shell command on the worker, use :py:class:`~buildbot.process.buildstep.ShellMixin`.
 This class provides a method to handle the myriad constructor arguments related to shell commands, as well as a method to create new :py:class:`~buildbot.process.remotecommand.RemoteCommand` instances.
 This mixin is the recommended method of implementing custom shell-based steps.
-The older pattern of subclassing ``ShellCommand`` is no longer recommended.
+For simple steps that don't involve much logic the `:bb:step:`ShellCommand` is recommended.
 
 A simple example of a step using the shell mixin is:
 
@@ -1121,7 +1121,7 @@ If the path does not exist (or anything fails) we mark the step as failed; if th
 
 
     from buildbot.plugins import steps, util
-    from buildbot.interfaces import WorkerTooOldError
+    from buildbot.interfaces import WorkerSetupError
     import stat
 
     class MyBuildStep(steps.BuildStep):
@@ -1135,7 +1135,7 @@ If the path does not exist (or anything fails) we mark the step as failed; if th
             workerver = (self.workerVersion('stat'),
                         self.workerVersion('glob'))
             if not all(workerver):
-                raise WorkerTooOldError('need stat and glob')
+                raise WorkerSetupError('need stat and glob')
 
             cmd = buildstep.RemoteCommand('stat', {'file': self.dirname})
 

@@ -18,7 +18,7 @@ from twisted.internet import reactor
 from twisted.python import log
 
 from buildbot import config as bbconfig
-from buildbot.interfaces import WorkerTooOldError
+from buildbot.interfaces import WorkerSetupError
 from buildbot.process import buildstep
 from buildbot.steps.source.base import Source
 from buildbot.steps.worker import CompositeStepMixin
@@ -71,9 +71,10 @@ class Git(Source, GitStepMixin):
                    "codebase", "mode", "method", "origin"]
 
     def __init__(self, repourl=None, branch='HEAD', mode='incremental', method=None,
-                 reference=None, submodules=False, shallow=False, progress=True, retryFetch=False,
-                 clobberOnFailure=False, getDescription=False, config=None,
-                 origin=None, sshPrivateKey=None, sshHostKey=None, sshKnownHosts=None, **kwargs):
+                 reference=None, submodules=False, remoteSubmodules=False, shallow=False,
+                 progress=True, retryFetch=False, clobberOnFailure=False, getDescription=False,
+                 config=None, origin=None, sshPrivateKey=None, sshHostKey=None, sshKnownHosts=None,
+                 **kwargs):
 
         if not getDescription and not isinstance(getDescription, dict):
             getDescription = False
@@ -84,6 +85,7 @@ class Git(Source, GitStepMixin):
         self.reference = reference
         self.retryFetch = retryFetch
         self.submodules = submodules
+        self.remoteSubmodules = remoteSubmodules
         self.shallow = shallow
         self.clobberOnFailure = clobberOnFailure
         self.mode = mode
@@ -126,7 +128,7 @@ class Git(Source, GitStepMixin):
             gitInstalled = yield self.checkFeatureSupport()
 
             if not gitInstalled:
-                raise WorkerTooOldError("git is not installed on worker")
+                raise WorkerSetupError("git is not installed on worker")
 
             patched = yield self.sourcedirIsPatched()
 
@@ -312,7 +314,7 @@ class Git(Source, GitStepMixin):
                 fetch_required = False
 
         if fetch_required:
-            command = ['fetch', '-t', self.repourl, self.branch]
+            command = ['fetch', '-f', '-t', self.repourl, self.branch]
             # If the 'progress' option is set, tell git fetch to output
             # progress information to the log. This can solve issues with
             # long fetches killed due to lack of output, but only works
@@ -321,7 +323,7 @@ class Git(Source, GitStepMixin):
                 if self.supportsProgress:
                     command.append('--progress')
                 else:
-                    print("Git versions < 1.7.2 don't support progress")
+                    log.msg("Git versions < 1.7.2 don't support progress")
 
             yield self._dovccmd(command)
 
@@ -362,14 +364,14 @@ class Git(Source, GitStepMixin):
         """Retry if clone failed"""
 
         command = ['clone']
-        switchToBranch = False
+        switchToBranch = self.branch != 'HEAD'
         if self.supportsBranch and self.branch != 'HEAD':
             if self.branch.startswith('refs/'):
                 # we can't choose this branch from 'git clone' directly; we
                 # must do so after the clone
-                switchToBranch = True
                 command += ['--no-checkout']
             else:
+                switchToBranch = False
                 command += ['--branch', self.branch]
         if shallowClone:
             command += ['--depth', str(int(shallowClone))]
@@ -383,7 +385,7 @@ class Git(Source, GitStepMixin):
             if self.supportsProgress:
                 command.append('--progress')
             else:
-                print("Git versions < 1.7.2 don't support progress")
+                log.msg("Git versions < 1.7.2 don't support progress")
         if self.retry:
             abandonOnFailure = (self.retry[1] <= 0)
         else:
@@ -427,9 +429,10 @@ class Git(Source, GitStepMixin):
         # init and update submodules, recursively. If there's not recursion
         # it will not do it.
         if self.submodules:
-            res = yield self._dovccmd(['submodule', 'update',
-                                       '--init', '--recursive'],
-                                      shallowClone)
+            cmdArgs = ["submodule", "update", "--init", "--recursive"]
+            if self.remoteSubmodules:
+                cmdArgs.append("--remote")
+            res = yield self._dovccmd(cmdArgs, shallowClone)
 
         return res
 
@@ -474,7 +477,10 @@ class Git(Source, GitStepMixin):
             if self.supportsSubmoduleForce:
                 vccmd.extend(['--force'])
             if self.supportsSubmoduleCheckout:
-                vccmd.extend(['--checkout'])
+                vccmd.extend(["--checkout"])
+            if self.remoteSubmodules:
+                vccmd.extend(["--remote"])
+
             rc = yield self._dovccmd(vccmd)
         return rc
 
@@ -578,7 +584,7 @@ class GitPush(buildstep.BuildStep, GitStepMixin, CompositeStepMixin):
             gitInstalled = yield self.checkFeatureSupport()
 
             if not gitInstalled:
-                raise WorkerTooOldError("git is not installed on worker")
+                raise WorkerSetupError("git is not installed on worker")
 
             yield self._downloadSshPrivateKeyIfNeeded()
             ret = yield self._doPush()
@@ -650,7 +656,7 @@ class GitTag(buildstep.BuildStep, GitStepMixin, CompositeStepMixin):
         gitInstalled = yield self.checkFeatureSupport()
 
         if not gitInstalled:
-            raise WorkerTooOldError("git is not installed on worker")
+            raise WorkerSetupError("git is not installed on worker")
 
         ret = yield self._doTag()
         return ret
@@ -729,7 +735,7 @@ class GitCommit(buildstep.BuildStep, GitStepMixin, CompositeStepMixin):
         gitInstalled = yield self.checkFeatureSupport()
 
         if not gitInstalled:
-            raise WorkerTooOldError("git is not installed on worker")
+            raise WorkerSetupError("git is not installed on worker")
 
         yield self._checkDetachedHead()
         yield self._doAdd()

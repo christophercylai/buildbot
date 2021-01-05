@@ -22,7 +22,6 @@ import mock
 from twisted.internet import defer
 from twisted.internet import reactor
 from twisted.python import components
-from twisted.python.compat import intToBytes
 from twisted.trial import unittest
 from twisted.web import resource
 from twisted.web import server
@@ -293,7 +292,7 @@ class MyResource(resource.Resource):
         data = json.dumps(args)
         data = unicode2bytes(data)
         request.setHeader(b'content-type', b'application/json')
-        request.setHeader(b'content-length', intToBytes(len(data)))
+        request.setHeader(b'content-length', b"%d" % len(data))
         if request.method == b'HEAD':
             return b''
         return data
@@ -437,9 +436,11 @@ class HTTPClientServiceTestTReqE2E(HTTPClientServiceTestTxRequestE2E):
 
 class HTTPClientServiceTestFakeE2E(HTTPClientServiceTestTxRequestE2E):
 
+    @defer.inlineCallbacks
     def httpFactory(self, parent):
-        return fakehttpclientservice.HTTPClientService.getService(
-            parent, 'http://127.0.0.1:{}'.format(self.port))
+        service = yield fakehttpclientservice.HTTPClientService.getService(
+            parent, self, 'http://127.0.0.1:{}'.format(self.port))
+        return service
 
     def expect(self, *arg, **kwargs):
         self._http.expect(*arg, **kwargs)
